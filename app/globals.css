@@ -1,0 +1,306 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Theme tokens — every page references these via utility classes (.bg-paper,
+ * .text-ink, .sketch-card …) so flipping `dark` on <html> retheme the whole
+ * app without touching component code.
+ * ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  --paper:        #edecea;
+  --paper-dot:    #c5c3bc;
+  --card:         #ffffff;
+  --card-soft:    #fafaf8;
+  --inset:        #fafaf8;
+
+  --ink:          #1a1a1a;
+  --ink-strong:   #000000;
+  --ink-soft:     #555555;
+  --ink-muted:    #888888;
+  --ink-faint:    #aaaaaa;
+  --ink-ghost:    #cccccc;
+  --ink-on-fill:  #ffffff;       /* text colour over a solid `--ink` block */
+
+  --line:         #1a1a1a;
+  --line-soft:    #dddddd;
+  --line-faint:   #f0efea;
+  --line-ghost:   #eeeeee;
+
+  --shadow:       #1a1a1a;
+  --shadow-soft:  #555555;
+
+  --accent-emerald: #059669;
+  --accent-red:     #dc2626;
+  --accent-amber:   #f59e0b;
+  --accent-blue:    #2563eb;
+
+  color-scheme: light;
+}
+
+.dark {
+  --paper:        #131316;
+  --paper-dot:    #2a2a2e;
+  --card:         #1f1f23;
+  --card-soft:    #18181c;
+  --inset:        #15151a;
+
+  --ink:          #f1f1ee;
+  --ink-strong:   #ffffff;
+  --ink-soft:     #c4c4c0;
+  --ink-muted:    #8a8a8e;
+  --ink-faint:    #6a6a6e;
+  --ink-ghost:    #44444a;
+  --ink-on-fill:  #131316;       /* dark text over the now-light `--ink` */
+
+  --line:         #f1f1ee;
+  --line-soft:    #38383e;
+  --line-faint:   #26262c;
+  --line-ghost:   #2c2c32;
+
+  --shadow:       #000000;
+  --shadow-soft:  #000000;
+
+  --accent-emerald: #34d399;
+  --accent-red:     #f87171;
+  --accent-amber:   #fbbf24;
+  --accent-blue:    #60a5fa;
+
+  color-scheme: dark;
+}
+
+@theme {
+  --font-body: var(--font-body);
+  --font-heading: var(--font-heading);
+  --font-marker: var(--font-marker);
+}
+
+/* ── Body: paper + dot grid + ink colour, theme-aware ── */
+body {
+  background-color: var(--paper);
+  background-image: radial-gradient(circle, var(--paper-dot) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--ink);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Smooth out theme flips for tokens but not for layout-affecting properties */
+.sketch-card,
+.sketch-card-sm,
+.sketch-inset,
+.sketch-btn-dark,
+.sketch-btn-light {
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+
+@layer utilities {
+  .font-body    { font-family: var(--font-body),    ui-sans-serif, system-ui, sans-serif; }
+  .font-heading { font-family: var(--font-heading), ui-sans-serif, system-ui, sans-serif; }
+  .font-marker  { font-family: var(--font-marker),  cursive; }
+
+  /* ── Token-backed colour utilities (use these instead of hex) ── */
+  .bg-paper       { background-color: var(--paper); }
+  .bg-card        { background-color: var(--card); }
+  .bg-card-soft   { background-color: var(--card-soft); }
+  .bg-inset       { background-color: var(--inset); }
+  .bg-ink         { background-color: var(--ink); }
+
+  .text-ink         { color: var(--ink); }
+  .text-ink-strong  { color: var(--ink-strong); }
+  .text-ink-soft    { color: var(--ink-soft); }
+  .text-ink-muted   { color: var(--ink-muted); }
+  .text-ink-faint   { color: var(--ink-faint); }
+  .text-ink-ghost   { color: var(--ink-ghost); }
+  .text-on-ink      { color: var(--ink-on-fill); }
+
+  .placeholder-ink-ghost::placeholder { color: var(--ink-ghost); }
+
+  .border-ink         { border-color: var(--line); }
+  .border-line-soft   { border-color: var(--line-soft); }
+  .border-line-faint  { border-color: var(--line-faint); }
+  .border-line-ghost  { border-color: var(--line-ghost); }
+
+  .divide-line-faint > * + * { border-color: var(--line-faint); }
+
+  /* ── Sketch component tokens ── */
+  .sketch-card {
+    background: var(--card);
+    border: 2px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 4px 4px 0 var(--shadow);
+  }
+  .sketch-card-sm {
+    background: var(--card);
+    border: 2px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 3px 3px 0 var(--shadow);
+  }
+  .sketch-inset {
+    background: var(--inset);
+    border: 2px solid var(--line);
+    border-radius: 8px;
+    color: var(--ink);
+  }
+  .sketch-inset:focus,
+  .sketch-inset:focus-within {
+    outline: none;
+    border-color: var(--line);
+    box-shadow: 2px 2px 0 var(--shadow);
+  }
+
+  /* ── Buttons ── */
+  .sketch-btn-dark {
+    background: var(--ink);
+    color: var(--ink-on-fill);
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    box-shadow: 3px 3px 0 var(--shadow-soft);
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sketch-btn-dark:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--shadow-soft);
+  }
+  .sketch-btn-dark:active:not(:disabled) {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--shadow-soft);
+  }
+  .sketch-btn-dark:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .sketch-btn-light {
+    background: var(--card);
+    color: var(--ink);
+    border: 2px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 3px 3px 0 var(--shadow);
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sketch-btn-light:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--shadow);
+  }
+  .sketch-btn-light:active:not(:disabled) {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--shadow);
+  }
+  .sketch-btn-light:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ── Focus ring (a11y) — visible only on keyboard nav ── */
+  .focus-ring:focus-visible {
+    outline: 3px solid var(--ink);
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+
+  /* ── Animations ── */
+  .animate-pop        { animation: pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .animate-shake      { animation: shake 0.45s ease-out; }
+  .animate-slide-up   { animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+  .animate-bounce-in  { animation: bounce-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .animate-float      { animation: float 3s ease-in-out infinite; }
+  .animate-fade-in    { animation: fade-in 0.3s ease-out; }
+  .animate-scale-in   { animation: scale-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .animate-spin-slow  { animation: spin 1.2s linear infinite; }
+  .animate-wiggle     { animation: wiggle 0.6s ease-in-out infinite; }
+}
+
+@keyframes spin       { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes pop        { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+@keyframes shake {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  15%      { transform: translateX(-8px) rotate(-1.5deg); }
+  30%      { transform: translateX(7px)  rotate(1.5deg); }
+  45%      { transform: translateX(-5px) rotate(-1deg); }
+  60%      { transform: translateX(4px)  rotate(0.5deg); }
+  75%      { transform: translateX(-2px); }
+}
+@keyframes slide-up   { from { transform: translateY(18px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes bounce-in  { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.06); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes float      { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes fade-in    { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scale-in   { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes wiggle     { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+
+/* ── Custom range slider (sketch style) ── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 0;
+  background: var(--ink);
+}
+input[type="range"]::-moz-range-track {
+  height: 5px;
+  background: var(--ink);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--card);
+  cursor: pointer;
+  margin-top: -8px;
+  border: 2px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--shadow);
+  transition: transform 0.15s;
+}
+input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--card);
+  cursor: pointer;
+  border: 2px solid var(--ink);
+}
+
+/* ── Scrollbar polish ── */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--line-soft); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+
+/* ── Details/summary ── */
+details summary { cursor: pointer; list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details[open] summary .chevron { transform: rotate(180deg); }
+.chevron { transition: transform 0.2s ease; }
+
+/* ── Selection ── */
+::selection { background: var(--ink); color: var(--ink-on-fill); }
+
+/* ── Reduced-motion friendly: disable big animations for users who prefer it ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Touch-target hint: ensure interactive elements meet 44x44 minimum ── */
+@media (pointer: coarse) {
+  button, a, [role="button"] { min-height: 40px; }
+}
+
+/* ── Hide overflow during page transitions to avoid scrollbar flicker ── */
+html { overflow-x: hidden; }
