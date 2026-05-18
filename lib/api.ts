@@ -1,33 +1,48 @@
 import type { Question, QuestionDifficulty, User } from "./types";
 
+const PROD_API_URL = "https://qrio-backend-latest.onrender.com";
+const LOCALHOST_RE = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i;
+
+function isLanHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    /^192\.168\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
+}
+
 /**
- * Derive the backend base URL at call-time from the browser's current hostname.
- * This makes LAN play work automatically: if the page is loaded from
- * http://192.168.1.5:3000, API calls go to http://192.168.1.5:8081 — no config
- * needed on phones/other devices.
+ * Resolve the backend base URL.
  *
- * Falls back to NEXT_PUBLIC_API_URL during SSR (no window).
+ * Priority:
+ *   1. An explicit non-localhost NEXT_PUBLIC_API_URL (e.g. set on Vercel).
+ *   2. LAN dev mode: if the page is loaded from a LAN/local hostname, derive
+ *      `http://<that-host>:8081` so a phone on WiFi talks to the right machine.
+ *   3. Production fallback: the deployed Render backend.
+ *
+ * Localhost-shaped env values are ignored in the browser — Next.js inlines
+ * NEXT_PUBLIC_* at build time, so letting them win would make every phone
+ * try to reach its own localhost.
  */
 function getApiBase(): string {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
+  const hasRealEnvUrl = envUrl && !LOCALHOST_RE.test(envUrl);
 
-  // SSR — no window, use env or fall back to localhost.
   if (typeof window === "undefined") {
-    return envUrl || "http://localhost:8081";
+    return hasRealEnvUrl ? envUrl! : PROD_API_URL;
   }
 
-  // Production deploy: an explicit non-localhost URL always wins.
-  // (Localhost values in .env.local are SSR fallbacks only — using them in
-  // the browser would break LAN devices like phones, which would try to
-  // reach their *own* localhost.)
-  if (envUrl && !/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(envUrl)) {
-    return envUrl;
+  if (hasRealEnvUrl) return envUrl!;
+
+  if (isLanHost(window.location.hostname)) {
+    const port = process.env.NEXT_PUBLIC_API_PORT || "8081";
+    return `${window.location.protocol}//${window.location.hostname}:${port}`;
   }
 
-  // LAN dev mode: derive backend host from the current page hostname so a
-  // phone hitting http://192.168.1.5:3000 talks to http://192.168.1.5:8081.
-  const port = process.env.NEXT_PUBLIC_API_PORT || "8081";
-  return `${window.location.protocol}//${window.location.hostname}:${port}`;
+  return PROD_API_URL;
 }
 
 function getToken(): string | null {
