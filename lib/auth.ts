@@ -57,5 +57,38 @@ export function hasUser(): boolean {
 
 /** Where to send the user after a game or when they hit "Home". */
 export function getHomePath(): string {
-  return isLoggedIn() ? "/dashboard" : "/multiplayer";
+  return isLoggedIn() ? "/dashboard" : "/";
+}
+
+// ── Guest game quota ─────────────────────────────────────────────────────────
+// Guests get a small free trial before being asked to register. Stored in
+// localStorage (not sessionStorage) so it persists across tabs and reloads —
+// the whole point is to remember across visits.
+
+const GUEST_GAMES_KEY = "qrio_guest_games_played";
+export const GUEST_GAME_LIMIT = 2;
+
+export function getGuestGamesPlayed(): number {
+  if (typeof window === "undefined") return 0;
+  const raw = localStorage.getItem(GUEST_GAMES_KEY);
+  const n = raw ? Number.parseInt(raw, 10) : 0;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+export function incrementGuestGamesPlayed(): number {
+  if (typeof window === "undefined") return 0;
+  const next = getGuestGamesPlayed() + 1;
+  try { localStorage.setItem(GUEST_GAMES_KEY, String(next)); } catch { /* ignore */ }
+  return next;
+}
+
+export function resetGuestGamesPlayed() {
+  if (typeof window === "undefined") return;
+  try { localStorage.removeItem(GUEST_GAMES_KEY); } catch { /* ignore */ }
+}
+
+/** True iff the visitor is a guest who has hit the free-trial cap. */
+export function guestMustRegister(): boolean {
+  if (isLoggedIn()) return false;
+  return getGuestGamesPlayed() >= GUEST_GAME_LIMIT;
 }
