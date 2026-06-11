@@ -85,10 +85,32 @@ export const api = {
       body: JSON.stringify({ tags, count, question_difficulty: questionDifficulty }),
     }),
 
-  createRoom: (questions: Question[], tags: string[]) =>
+  createRoom: (
+    questions: Question[],
+    tags: string[],
+    hostUsername: string,
+    questionDifficulty: QuestionDifficulty = "medium",
+  ) =>
     request<{ room_code: string; session_id: number }>("/api/room/create", {
       method: "POST",
-      body: JSON.stringify({ questions, tags }),
+      body: JSON.stringify({
+        questions,
+        tags,
+        host_username: hostUsername,
+        question_difficulty: questionDifficulty,
+      }),
+    }),
+
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<{ message: string }>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
+
+  forgotPassword: (email: string, newPassword: string) =>
+    request<{ message: string }>("/api/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email, new_password: newPassword }),
     }),
 };
 

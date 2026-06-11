@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronLeft, LogOut, Menu, Target, User as UserIcon, Users, X } from "lucide-react";
+import { ChevronLeft, KeyRound, LogOut, Menu, Target, User as UserIcon, Users, X } from "lucide-react";
 import { clearAuth, getUser, getHomePath, isLoggedIn } from "@/lib/auth";
 import ThemeToggle from "./ThemeToggle";
 
@@ -35,11 +35,23 @@ export default function Navbar({ title, showBack = false, backHref, minimal = fa
     router.push("/");
   }
 
+  function handleBack() {
+    // Prefer the real browser back so users return to where they came from.
+    // Fall back to backHref / home when there's no entry above the current
+    // page (e.g. they opened the URL directly).
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push(backHref ?? getHomePath());
+  }
+
   const navLinks = loggedIn
     ? [
         { href: "/dashboard",    label: "Home",        icon: <UserIcon size={15} /> },
         { href: "/solo",         label: "Lone Wolf",   icon: <Target   size={15} /> },
         { href: "/multiplayer",  label: "Multiplayer", icon: <Users    size={15} /> },
+        { href: "/account",      label: "Account",     icon: <KeyRound size={15} /> },
       ]
     : [];
 
@@ -54,7 +66,7 @@ export default function Navbar({ title, showBack = false, backHref, minimal = fa
       <div className="flex items-center gap-3 min-w-0">
         {showBack ? (
           <button
-            onClick={() => router.push(backHref ?? getHomePath())}
+            onClick={handleBack}
             className="flex items-center gap-1 text-ink-muted hover:text-ink transition-colors text-sm font-bold focus-ring rounded-md px-1 py-1"
             aria-label="Go back"
           >

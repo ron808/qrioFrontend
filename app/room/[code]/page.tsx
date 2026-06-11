@@ -3,32 +3,40 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { createWebSocket } from "@/lib/api";
-import { getUsername, hasUser, getHomePath } from "@/lib/auth";
+import { api, createWebSocket } from "@/lib/api";
+import {
+  getUsername, hasUser, getHomePath, isLoggedIn, incrementGuestGamesPlayed,
+} from "@/lib/auth";
 import { fadeUp, scaleIn, stagger } from "@/lib/motion";
 import {
   DIFFICULTY_CONFIG,
   MULTI_DIFFICULTIES,
+  QUESTION_DIFFICULTY_CONFIG,
   type GamePhase,
+  type LeaderboardEntry,
+  type PlayerCounts,
   type PlayerScores,
   type Question,
   type QuestionDifficulty,
+  type WSGameFinished,
   type WSMessage,
+  type WSNewGameReady,
+  type WSNextQuestion,
   type WSPlayerAnswered,
   type WSPlayerJoined,
   type WSPlayerLeft,
   type WSPlayerList,
   type WSPlayerSkipped,
+  type WSRoomState,
   type WSStartGame,
   type WSVoteDifficulty,
-  type WSNextQuestion,
 } from "@/lib/types";
 import { saveMultiplayerGame } from "@/lib/stats";
 import {
   Copy, Users, Hash, Timer, Trophy, Check, X,
   Leaf, Flame, Infinity as InfinityIcon, Play, RotateCcw, Home,
   ChevronDown, Crown, ArrowRight, Wifi, AlertTriangle,
-  SkipForward, Loader2,
+  SkipForward, Loader2, BookOpen, Brain, Bot, Target, Skull, Swords,
 } from "lucide-react";
 
 const OPTION_LABELS = ["A", "B", "C", "D"];
@@ -39,6 +47,13 @@ function TimerDifficultyIcon({ seconds }: { seconds: number }) {
   if (seconds >= 25) return <Leaf size={20} />;
   if (seconds >= 12) return <Timer size={20} />;
   return <Flame size={20} />;
+}
+
+function QuestionDifficultyIcon({ d }: { d: QuestionDifficulty }) {
+  if (d === "easy") return <Leaf size={18} />;
+  if (d === "medium") return <Target size={18} />;
+  if (d === "hard") return <Skull size={18} />;
+  return <Swords size={18} />;
 }
 
 function CircularTimer({ seconds, total }: { seconds: number; total: number }) {
@@ -128,6 +143,197 @@ function calcTimer(votes: Record<string, number>): number {
   return Math.max(8, Math.min(30, Math.round(avg)));
 }
 
+// Compact horizontal scoreboard for mobile during play. Shows everyone's
+// score with the current player highlighted.
+function MobileScoreStrip({
+  sortedScores,
+  myUsername,
+  respondedUsers,
+}: {
+  sortedScores: [string, number][];
+  myUsername: string;
+  respondedUsers: Set<string>;
+}) {
+  return (
+    <div className="md:hidden flex items-center gap-2 overflow-x-auto px-3 py-2 border-b-2 border-ink bg-card">
+      <Trophy size={14} className="text-ink-soft shrink-0" />
+      {sortedScores.map(([name, score], i) => {
+        const isMe = name === myUsername;
+        return (
+          <motion.div
+            key={name}
+            layout
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border-2 text-xs font-black shrink-0 ${
+              isMe ? "bg-ink text-on-ink border-ink" : "bg-card border-line-soft text-ink"
+            }`}
+          >
+            <span className="text-[10px] opacity-70">#{i + 1}</span>
+            <span className="truncate max-w-[80px]">{isMe ? "You" : name}</span>
+            <motion.span key={score} initial={{ scale: 1.3 }} animate={{ scale: 1 }} className="tabular-nums">
+              {score}
+            </motion.span>
+            <span className={`w-1.5 h-1.5 rounded-full ${respondedUsers.has(name) ? "bg-emerald-500" : "bg-line-soft"}`} />
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Modal shown to the host on the results screen to set up the next round in
+// the same room.
+function NewRoundDialog({
+  onClose,
+  onStart,
+}: {
+  onClose: () => void;
+  onStart: (params: { tags: string[]; count: number; questionDifficulty: QuestionDifficulty }) => Promise<void>;
+}) {
+  const [tagInput, setTagInput] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [count, setCount] = useState(5);
+  const [qd, setQd] = useState<QuestionDifficulty>("medium");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  function addTag(raw: string) {
+    const t = raw.trim().replace(/,+$/, "");
+    if (t && !tags.includes(t) && tags.length < 10) setTags((p) => [...p, t]);
+    setTagInput("");
+  }
+
+  async function handleStart() {
+    if (tags.length === 0) { setErr("Add at least one topic"); return; }
+    setErr("");
+    setBusy(true);
+    try {
+      await onStart({ tags, count, questionDifficulty: qd });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to start round");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.85, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.85, y: 20 }}
+        transition={{ type: "spring", stiffness: 320, damping: 22 }}
+        className="sketch-card p-5 sm:p-6 w-full max-w-md space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-heading text-2xl text-ink">New Round</h3>
+            <p className="text-ink-muted text-xs font-medium">Same room, fresh questions</p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="text-ink-faint hover:text-ink p-1 focus-ring rounded-md"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-2">
+            <BookOpen size={12} /> Topics
+          </label>
+          <div
+            className="flex flex-wrap gap-2 p-3 sketch-inset min-h-[48px] cursor-text"
+            onClick={() => document.getElementById("nr-tag-input")?.focus()}
+          >
+            <AnimatePresence>
+              {tags.map((tag, i) => (
+                <motion.span
+                  key={tag}
+                  layout
+                  initial={{ opacity: 0, scale: 0.6 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.6 }}
+                  className="flex items-center gap-1 bg-ink text-on-ink text-xs px-2.5 py-1 rounded-full font-bold"
+                >
+                  {tag}
+                  <button onClick={() => setTags((p) => p.filter((_, j) => j !== i))} aria-label={`Remove ${tag}`}>×</button>
+                </motion.span>
+              ))}
+            </AnimatePresence>
+            <input
+              id="nr-tag-input"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); }
+                if (e.key === "Backspace" && !tagInput && tags.length) setTags((p) => p.slice(0, -1));
+              }}
+              onBlur={() => tagInput.trim() && addTag(tagInput)}
+              placeholder={tags.length === 0 ? "Type a topic, press Enter…" : "Add more…"}
+              className="flex-1 min-w-[120px] bg-transparent outline-none text-sm text-ink placeholder-ink-ghost"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-2">
+            <Hash size={12} /> Questions: <span className="text-ink ml-1">{count}</span>
+          </label>
+          <input type="range" min={3} max={20} value={count} onChange={(e) => setCount(+e.target.value)} className="w-full" />
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-2">
+            <Brain size={12} /> Difficulty
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {(Object.keys(QUESTION_DIFFICULTY_CONFIG) as QuestionDifficulty[]).map((d) => {
+              const cfg = QUESTION_DIFFICULTY_CONFIG[d];
+              const active = qd === d;
+              return (
+                <button
+                  key={d}
+                  onClick={() => setQd(d)}
+                  className={`flex items-center justify-center gap-2 py-2 rounded-xl border-2 font-bold text-xs ${
+                    active ? cfg.activeClass : "border-line-soft text-ink-muted bg-card hover:border-ink hover:text-ink"
+                  }`}
+                >
+                  <QuestionDifficultyIcon d={d} />
+                  {cfg.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {err && (
+          <p className="text-red-600 dark:text-red-400 text-xs font-bold flex items-center gap-1.5">
+            <AlertTriangle size={12} /> {err}
+          </p>
+        )}
+
+        <motion.button
+          onClick={handleStart}
+          disabled={busy}
+          whileTap={{ scale: 0.97 }}
+          whileHover={{ y: -1 }}
+          className="w-full sketch-btn-dark gap-2 py-3 focus-ring"
+        >
+          {busy ? <><Bot size={15} className="animate-spin-slow" /> Generating…</> : <>Start New Round <ArrowRight size={14} /></>}
+        </motion.button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 export default function RoomPage() {
   const params = useParams();
   const router = useRouter();
@@ -142,6 +348,7 @@ export default function RoomPage() {
   const [reconnecting, setReconnecting] = useState(false);
   const [players, setPlayers] = useState<string[]>([]);
   const [scores, setScores] = useState<PlayerScores>({});
+  const [correctCounts, setCorrectCounts] = useState<PlayerCounts>({});
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
   const [answered, setAnswered] = useState<number | null>(null);
@@ -165,9 +372,17 @@ export default function RoomPage() {
   const questionsRef = useRef<Question[]>([]);
   const inTransitionRef = useRef(false);
   const advanceTriggerHandled = useRef(-1);
+  const guestCountedRef = useRef(false);
 
   const [roomTags, setRoomTags] = useState<string[]>([]);
   const [roomQDiff, setRoomQDiff] = useState<QuestionDifficulty>("medium");
+
+  // Canonical leaderboard from the server (sent on game_finished). Authoritative
+  // — every client sorts the same way using this exact list.
+  const [finalLeaderboard, setFinalLeaderboard] = useState<LeaderboardEntry[] | null>(null);
+
+  // New-round dialog state (host-only on results)
+  const [showNewRound, setShowNewRound] = useState(false);
 
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { currentQRef.current = currentQ; }, [currentQ]);
@@ -179,27 +394,31 @@ export default function RoomPage() {
       try { setRoomTags(JSON.parse(stored) as string[]); } catch { /* ignore */ }
     }
     const qd = sessionStorage.getItem(`qrio_qdiff_${roomCode}`);
-    if (qd === "easy" || qd === "medium" || qd === "hard") setRoomQDiff(qd);
+    if (qd === "easy" || qd === "medium" || qd === "hard" || qd === "spartan") setRoomQDiff(qd);
   }, [roomCode]);
 
+  // Persist stats once per game completion. Uses server's correct_count so it
+  // matches what other players see.
   const statsSaved = useRef(false);
   useEffect(() => {
     if (phase !== "results" || !myUsername.current || statsSaved.current) return;
+    if (!finalLeaderboard) return;
     statsSaved.current = true;
-    const myScore = scores[myUsername.current] ?? 0;
-    const qMult = roomQDiff === "easy" ? 1 : roomQDiff === "medium" ? 1.5 : 2;
-    const myCorrect = Math.round(myScore / (10 * qMult));
-    const sortedByScore = Object.entries(scores).sort(([, a], [, b]) => b - a);
-    const myRank = sortedByScore.findIndex(([name]) => name === myUsername.current) + 1;
+    const me = finalLeaderboard.find((e) => e.username === myUsername.current);
+    if (!me) return;
     saveMultiplayerGame({
       topics: roomTags,
-      correct: myCorrect,
+      correct: me.correct_count,
       total: questionsRef.current.length,
-      rank: myRank || 1,
-      totalPlayers: Math.max(sortedByScore.length, 1),
+      rank: me.rank,
+      totalPlayers: finalLeaderboard.length,
       questionDifficulty: roomQDiff,
     });
-  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isLoggedIn() && !guestCountedRef.current) {
+      guestCountedRef.current = true;
+      incrementGuestGamesPlayed();
+    }
+  }, [phase, finalLeaderboard]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function sendWS(data: object) {
     if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(data));
@@ -218,7 +437,8 @@ export default function RoomPage() {
 
     setTimeout(() => {
       if (nextQ >= questionsRef.current.length) {
-        setPhase("results");
+        // The server now sends game_finished and bumps to results. Stay here
+        // and wait for that message rather than racing it.
       } else {
         setCurrentQ(nextQ);
         setAnswered(null);
@@ -232,14 +452,60 @@ export default function RoomPage() {
 
   const handleMessage = useCallback((msg: WSMessage) => {
     switch (msg.type) {
+      case "room_state": {
+        // Authoritative snapshot. Fires on every (re)connect.
+        const m = msg as WSRoomState;
+        setPlayers(m.players);
+        setScores(m.scores);
+        setCorrectCounts(m.correct_counts);
+        if (m.votes) setVotes(m.votes);
+        setIsHost(m.you_are_host);
+        setTimerSeconds(m.timer_seconds);
+        setRoomQDiff(m.question_difficulty);
+        if (m.tags && m.tags.length > 0) setRoomTags(m.tags);
+        if (m.questions && m.questions.length > 0) setQuestions(m.questions);
+
+        if (m.phase === "lobby") {
+          // Clear any stale game state when bouncing back to lobby.
+          setFinalLeaderboard(null);
+          setQuestionAnswers({});
+          if (phaseRef.current !== "lobby") setPhase("lobby");
+        } else if (m.phase === "playing") {
+          // Mid-game rejoin. We don't know WHICH option they picked (server
+          // only tracks "answered yes/no"), so use a sentinel that locks the
+          // UI without claiming any specific option. -1 means skipped; -3
+          // means "answered but choice unknown — show 'Locked in' fallback".
+          setCurrentQ(m.current_question);
+          const alreadyAnswered = m.my_answered.includes(m.current_question);
+          const alreadySkipped = m.my_skipped.includes(m.current_question);
+          if (alreadySkipped) {
+            setAnswered(-1);
+          } else if (alreadyAnswered) {
+            setAnswered(-3);
+          } else {
+            setAnswered(null);
+          }
+          setMyResult(null);
+          // Pre-populate respondedUsers with myself if I already responded so
+          // the "waiting for others" overlay fires immediately.
+          if (alreadyAnswered || alreadySkipped) {
+            setRespondedUsers((prev) => new Set([...prev, myUsername.current]));
+          }
+          setPhase("playing");
+        } else if (m.phase === "post_game") {
+          // Rejoined after game ended but before host started a new round.
+          // Stay on lobby-style view so the host can trigger New Round.
+          if (phaseRef.current !== "results") setPhase("results");
+        }
+        break;
+      }
       case "player_list": {
+        // Legacy message — still handled for backward compat.
         const m = msg as WSPlayerList;
         setPlayers(m.players);
         setScores((s) => {
           const next = { ...s };
-          for (const p of m.players) {
-            if (next[p] === undefined) next[p] = 0;
-          }
+          for (const p of m.players) if (next[p] === undefined) next[p] = 0;
           return next;
         });
         if (m.votes) setVotes(m.votes);
@@ -248,7 +514,10 @@ export default function RoomPage() {
       case "player_joined": {
         const m = msg as WSPlayerJoined;
         setPlayers((p) => [...new Set([...p, m.username])]);
-        setScores((s) => ({ ...s, [m.username]: s[m.username] ?? 0 }));
+        setScores((s) => ({ ...s, [m.username]: m.score ?? s[m.username] ?? 0 }));
+        if (typeof m.correct_count === "number") {
+          setCorrectCounts((c) => ({ ...c, [m.username]: m.correct_count! }));
+        }
         break;
       }
       case "player_left": {
@@ -259,6 +528,7 @@ export default function RoomPage() {
       case "player_answered": {
         const m = msg as WSPlayerAnswered;
         setScores((s) => ({ ...s, [m.username]: m.new_score }));
+        setCorrectCounts((c) => ({ ...c, [m.username]: m.correct_count }));
         setRespondedUsers((prev) => new Set([...prev, m.username]));
         setQuestionAnswers((qa) => ({
           ...qa,
@@ -269,6 +539,8 @@ export default function RoomPage() {
       }
       case "player_skipped": {
         const m = msg as WSPlayerSkipped;
+        setScores((s) => ({ ...s, [m.username]: m.new_score }));
+        setCorrectCounts((c) => ({ ...c, [m.username]: m.correct_count }));
         setRespondedUsers((prev) => new Set([...prev, m.username]));
         break;
       }
@@ -281,6 +553,10 @@ export default function RoomPage() {
         setMyResult(null);
         setRespondedUsers(new Set());
         setTimeLeft(m.timer_seconds ?? 15);
+        setFinalLeaderboard(null);
+        setQuestionAnswers({});
+        statsSaved.current = false;
+        guestCountedRef.current = false;
         setPhase("playing");
         break;
       }
@@ -296,12 +572,55 @@ export default function RoomPage() {
         }
         break;
       }
+      case "game_finished": {
+        const m = msg as WSGameFinished;
+        setFinalLeaderboard(m.leaderboard);
+        setRoomQDiff(m.question_difficulty);
+        // Reflect canonical scores/counts.
+        const finalScores: PlayerScores = {};
+        const finalCounts: PlayerCounts = {};
+        for (const entry of m.leaderboard) {
+          finalScores[entry.username] = entry.score;
+          finalCounts[entry.username] = entry.correct_count;
+        }
+        setScores(finalScores);
+        setCorrectCounts(finalCounts);
+        setPhase("results");
+        break;
+      }
+      case "new_game_ready": {
+        const m = msg as WSNewGameReady;
+        setQuestions(m.questions);
+        setRoomTags(m.tags);
+        setRoomQDiff(m.question_difficulty);
+        setTimerSeconds(m.timer_seconds);
+        setCurrentQ(0);
+        setAnswered(null);
+        setMyResult(null);
+        setRespondedUsers(new Set());
+        setQuestionAnswers({});
+        setFinalLeaderboard(null);
+        setScores((s) => {
+          const next: PlayerScores = {};
+          for (const p of Object.keys(s)) next[p] = 0;
+          return next;
+        });
+        setCorrectCounts((c) => {
+          const next: PlayerCounts = {};
+          for (const p of Object.keys(c)) next[p] = 0;
+          return next;
+        });
+        statsSaved.current = false;
+        guestCountedRef.current = false;
+        setShowNewRound(false);
+        setPhase("lobby");
+        break;
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!myUsername.current) return;
-    setIsHost(sessionStorage.getItem(`qrio_host_${roomCode}`) === "true");
 
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -320,39 +639,37 @@ export default function RoomPage() {
       socket.onclose = (ev) => {
         ws.current = null;
         if (intentionalClose.current) return;
-        if (phaseRef.current === "results") return;
 
-        // Server tells us the room is gone — stop retrying and tell the user.
+        // 4404 = room doesn't exist; 4409 = username collision. Stop retrying.
         if (ev.code === 4404) {
           setReconnecting(false);
           setPhase("error");
           setError("This room no longer exists. Ask the host for a fresh code.");
           return;
         }
+        if (ev.code === 4409) {
+          setReconnecting(false);
+          setPhase("error");
+          setError("That name is already taken in this room. Pick a different one.");
+          return;
+        }
 
-        // Keep retrying with capped exponential backoff. Phones can sleep for
-        // a long time, so don't give up after a few attempts — the backend
-        // holds the room for several minutes after the last client leaves.
         reconnectCount.current += 1;
         const delay = Math.min(1000 * Math.pow(2, reconnectCount.current - 1), 8000);
         setReconnecting(true);
         retryTimer = setTimeout(connect, delay);
       };
 
-      socket.onerror = () => {
-        // Don't surface anything here — onclose handles the retry/error state.
-      };
+      socket.onerror = () => { /* let onclose drive */ };
 
       socket.onmessage = (e) => {
         try { handleMessage(JSON.parse(e.data as string) as WSMessage); } catch { /* ignore */ }
       };
     }
 
-    // When the phone screen wakes / tab refocuses, the WS may already be
-    // dead but the close event hasn't fired yet. Force a reconnect.
     function wakeReconnect() {
       if (intentionalClose.current) return;
-      if (phaseRef.current === "results" || phaseRef.current === "error") return;
+      if (phaseRef.current === "error") return;
       const sock = ws.current;
       if (!sock || sock.readyState === WebSocket.CLOSED || sock.readyState === WebSocket.CLOSING) {
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
@@ -422,7 +739,36 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const sortedScores = Object.entries(scores).sort(([, a], [, b]) => b - a);
+  async function startNewRound(params: {
+    tags: string[];
+    count: number;
+    questionDifficulty: QuestionDifficulty;
+  }) {
+    // Host generates questions then asks the server to set them up as the
+    // next round. Server resets scores and broadcasts new_game_ready.
+    const genRes = await api.generateQuestions(params.tags, params.count, params.questionDifficulty);
+    sendWS({
+      type: "request_new_game",
+      data: {
+        questions: genRes.questions,
+        tags: params.tags,
+        question_difficulty: params.questionDifficulty,
+        timer_seconds: calcTimer(votes),
+      },
+    });
+    sessionStorage.setItem(`qrio_tags_${roomCode}`, JSON.stringify(params.tags));
+    sessionStorage.setItem(`qrio_qdiff_${roomCode}`, params.questionDifficulty);
+  }
+
+  // Sorted scores for in-game scoreboard. Stable order on ties (alphabetical)
+  // matches the server's tie-break so ranks don't flicker.
+  const sortedScores = Object.entries(scores).sort(([an, a], [bn, b]) => {
+    if (b !== a) return b - a;
+    const ac = correctCounts[an] ?? 0;
+    const bc = correctCounts[bn] ?? 0;
+    if (bc !== ac) return bc - ac;
+    return an.localeCompare(bn);
+  });
   const q = questions[currentQ];
 
   const ReconnectingBanner = (
@@ -511,11 +857,8 @@ export default function RoomPage() {
   if (phase === "lobby") {
     const calculatedTimer = calcTimer(votes);
     const votedCount = Object.keys(votes).length;
-    // Tally votes per option
     const voteTally: Record<number, number> = {};
-    for (const sec of Object.values(votes)) {
-      voteTally[sec] = (voteTally[sec] ?? 0) + 1;
-    }
+    for (const sec of Object.values(votes)) voteTally[sec] = (voteTally[sec] ?? 0) + 1;
 
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-5">
@@ -541,22 +884,11 @@ export default function RoomPage() {
               {roomCode}
               <AnimatePresence mode="wait" initial={false}>
                 {copied ? (
-                  <motion.span
-                    key="check"
-                    initial={{ scale: 0, rotate: -180 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    exit={{ scale: 0 }}
-                    transition={{ type: "spring", stiffness: 400, damping: 18 }}
-                  >
+                  <motion.span key="check" initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0 }}>
                     <Check size={22} className="text-emerald-600" />
                   </motion.span>
                 ) : (
-                  <motion.span
-                    key="copy"
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    exit={{ scale: 0 }}
-                  >
+                  <motion.span key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
                     <Copy size={22} className="text-ink-faint" />
                   </motion.span>
                 )}
@@ -616,7 +948,6 @@ export default function RoomPage() {
                       active ? `${cfg.activeClass} shadow-[2px_2px_0_var(--shadow)]` : "border-line-soft text-ink-muted bg-card hover:border-ink hover:text-ink"
                     }`}
                   >
-                    {/* Tally bar fill */}
                     {tally > 0 && (
                       <motion.div
                         initial={{ width: 0 }}
@@ -713,6 +1044,13 @@ export default function RoomPage() {
             {currentQ + 1} / {questions.length}
           </span>
         </div>
+
+        {/* Mobile-only scoreboard strip — desktop gets the sidebar */}
+        <MobileScoreStrip
+          sortedScores={sortedScores}
+          myUsername={myUsername.current}
+          respondedUsers={respondedUsers}
+        />
 
         <div className="flex flex-1 overflow-hidden">
           <div className="flex-1 flex flex-col items-center justify-center p-5 gap-5 max-w-2xl mx-auto w-full">
@@ -831,6 +1169,7 @@ export default function RoomPage() {
             </AnimatePresence>
           </div>
 
+          {/* Desktop sidebar scoreboard */}
           <div className="hidden md:flex w-52 border-l-2 border-ink bg-card flex-col p-4 gap-3">
             <p className="flex items-center gap-2 text-xs font-black text-ink-muted uppercase tracking-widest">
               <Trophy size={12} /> Scores
@@ -912,6 +1251,15 @@ export default function RoomPage() {
   }
 
   // ── RESULTS ─────────────────────────────────────────────────────────────
+  // Prefer the authoritative leaderboard from the server when present.
+  const resultsRows: LeaderboardEntry[] = finalLeaderboard
+    ?? sortedScores.map(([name, score], i) => ({
+      username: name,
+      score,
+      correct_count: correctCounts[name] ?? 0,
+      rank: i + 1,
+    }));
+
   return (
     <div className="min-h-screen flex flex-col items-center p-5 pt-8">
       <motion.div
@@ -933,7 +1281,7 @@ export default function RoomPage() {
           </motion.div>
           <h1 className="font-heading text-5xl text-ink">Game Over!</h1>
           <p className="text-ink-muted mt-1 text-sm font-medium">
-            {players.length} players · Room {roomCode}
+            {resultsRows.length} players · Room {roomCode}
           </p>
         </motion.div>
 
@@ -942,32 +1290,35 @@ export default function RoomPage() {
             <Trophy size={15} />
             <h3 className="font-black text-ink">Leaderboard</h3>
           </div>
-          {sortedScores.map(([name, score], i) => {
-            const qMult = roomQDiff === "easy" ? 1 : roomQDiff === "medium" ? 1.5 : 2;
-            const correct = Math.round(score / (10 * qMult));
-            const pct = questions.length > 0 ? Math.round((correct / questions.length) * 100) : 0;
-            const isMe = name === myUsername.current;
+          {resultsRows.map((entry, i) => {
+            const pct = questions.length > 0
+              ? Math.round((entry.correct_count / questions.length) * 100)
+              : 0;
+            const isMe = entry.username === myUsername.current;
             return (
               <motion.div
-                key={name}
+                key={entry.username}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.3 + i * 0.08 }}
-                className={`flex items-center gap-3 px-5 py-4 ${i < sortedScores.length - 1 ? "border-b border-line-faint" : ""} ${isMe ? "bg-card-soft" : ""}`}
+                className={`flex items-center gap-3 px-5 py-4 ${i < resultsRows.length - 1 ? "border-b border-line-faint" : ""} ${isMe ? "bg-card-soft" : ""}`}
               >
                 <span className={`w-8 text-center font-black text-lg shrink-0 ${
-                  i === 0 ? "text-amber-500" : i === 1 ? "text-ink-muted" : i === 2 ? "text-amber-700" : "text-ink-ghost"
+                  entry.rank === 1 ? "text-amber-500"
+                  : entry.rank === 2 ? "text-ink-muted"
+                  : entry.rank === 3 ? "text-amber-700"
+                  : "text-ink-ghost"
                 }`}>
-                  {i === 0 ? <Crown size={20} className="mx-auto" /> : `#${i + 1}`}
+                  {entry.rank === 1 ? <Crown size={20} className="mx-auto" /> : `#${entry.rank}`}
                 </span>
                 <span className={`flex-1 font-bold truncate ${isMe ? "text-ink" : "text-ink-soft"}`}>
-                  {name}
+                  {entry.username}
                   {isMe && <span className="text-xs text-ink-faint font-medium ml-1">(you)</span>}
                 </span>
                 <div className="text-right shrink-0">
-                  <div className="font-heading text-xl text-ink tabular-nums">{score} pts</div>
+                  <div className="font-heading text-xl text-ink tabular-nums">{entry.score} pts</div>
                   <div className="text-xs text-ink-faint font-medium">
-                    {correct}/{questions.length} correct · {pct}%
+                    {entry.correct_count}/{questions.length} correct · {pct}%
                   </div>
                 </div>
               </motion.div>
@@ -983,16 +1334,16 @@ export default function RoomPage() {
             <div className="divide-y divide-line-faint">
               {questions.map((question, i) => {
                 const qa = questionAnswers[i] ?? {};
-                const correct = Object.entries(qa).filter(([, c]) => c).map(([u]) => u);
-                const wrong = Object.entries(qa).filter(([, c]) => !c).map(([u]) => u);
+                const correctNames = Object.entries(qa).filter(([, c]) => c).map(([u]) => u);
+                const wrongNames = Object.entries(qa).filter(([, c]) => !c).map(([u]) => u);
                 return (
                   <details key={i} className="group">
                     <summary className="flex items-center gap-3 px-5 py-4 hover:bg-card-soft transition-colors cursor-pointer">
                       <span className="text-ink-muted text-sm font-black w-6 shrink-0">Q{i + 1}</span>
                       <span className="flex-1 text-sm text-ink font-medium line-clamp-1">{question.question}</span>
                       <span className="text-xs text-ink-muted font-bold shrink-0 flex items-center gap-1">
-                        <Check size={12} className="text-emerald-600" />{correct.length}
-                        <X size={12} className="text-red-500 ml-1" />{wrong.length}
+                        <Check size={12} className="text-emerald-600" />{correctNames.length}
+                        <X size={12} className="text-red-500 ml-1" />{wrongNames.length}
                       </span>
                       <ChevronDown size={14} className="text-ink-faint ml-1 shrink-0 transition-transform group-open:rotate-180" />
                     </summary>
@@ -1000,17 +1351,17 @@ export default function RoomPage() {
                       <p className="text-ink-muted text-xs font-medium">
                         Correct: <span className="text-emerald-600 font-black">{question.options[question.answer]}</span>
                       </p>
-                      {correct.length > 0 && (
+                      {correctNames.length > 0 && (
                         <p className="text-emerald-600 font-semibold flex items-center gap-1.5">
-                          <Check size={13} /> Got it: {correct.join(", ")}
+                          <Check size={13} /> Got it: {correctNames.join(", ")}
                         </p>
                       )}
-                      {wrong.length > 0 && (
+                      {wrongNames.length > 0 && (
                         <p className="text-red-600 font-semibold flex items-center gap-1.5">
-                          <X size={13} /> Missed: {wrong.join(", ")}
+                          <X size={13} /> Missed: {wrongNames.join(", ")}
                         </p>
                       )}
-                      {correct.length === 0 && wrong.length === 0 && (
+                      {correctNames.length === 0 && wrongNames.length === 0 && (
                         <p className="text-ink-faint">No answers recorded</p>
                       )}
                     </div>
@@ -1021,32 +1372,48 @@ export default function RoomPage() {
           </motion.div>
         )}
 
-        <motion.div variants={fadeUp} className="flex gap-3">
+        <motion.div variants={fadeUp} className="flex flex-col sm:flex-row gap-3">
+          {isHost ? (
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              whileHover={{ y: -1 }}
+              onClick={() => setShowNewRound(true)}
+              className="flex-1 sketch-btn-dark gap-2 py-3.5 focus-ring"
+            >
+              <RotateCcw size={15} /> New Round Here
+            </motion.button>
+          ) : (
+            <div className="flex-1 sketch-card py-3.5 text-center text-ink-muted font-bold text-sm">
+              Waiting for host to start a new round…
+            </div>
+          )}
           <motion.button
             whileTap={{ scale: 0.97 }}
             whileHover={{ y: -1 }}
             onClick={() => {
+              intentionalClose.current = true;
               sessionStorage.removeItem(`qrio_questions_${roomCode}`);
               sessionStorage.removeItem(`qrio_host_${roomCode}`);
               sessionStorage.removeItem(`qrio_tags_${roomCode}`);
               sessionStorage.removeItem(`qrio_qdiff_${roomCode}`);
-              router.push("/multiplayer");
+              router.push(getHomePath());
             }}
-            className="flex-1 sketch-btn-dark gap-2 py-3.5 focus-ring"
-          >
-            <RotateCcw size={15} /> Play Again
-          </motion.button>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ y: -1 }}
-            onClick={() => router.push(getHomePath())}
             className="flex-1 sketch-btn-light gap-2 py-3.5 focus-ring"
           >
-            <Home size={15} /> Home
+            <Home size={15} /> Leave
           </motion.button>
         </motion.div>
 
       </motion.div>
+
+      <AnimatePresence>
+        {showNewRound && (
+          <NewRoundDialog
+            onClose={() => setShowNewRound(false)}
+            onStart={startNewRound}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

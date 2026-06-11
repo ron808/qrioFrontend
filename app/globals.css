@@ -45,10 +45,10 @@
 
   --ink:          #f1f1ee;
   --ink-strong:   #ffffff;
-  --ink-soft:     #c4c4c0;
-  --ink-muted:    #8a8a8e;
-  --ink-faint:    #6a6a6e;
-  --ink-ghost:    #44444a;
+  --ink-soft:     #d6d6d2;       /* was #c4c4c0 — brighter for body copy in dark mode */
+  --ink-muted:    #a8a8ac;       /* was #8a8a8e — bumped for label/meta text */
+  --ink-faint:    #888890;       /* was #6a6a6e — was too dim against #131316 paper */
+  --ink-ghost:    #606068;       /* was #44444a — still subtle but readable */
   --ink-on-fill:  #131316;       /* dark text over the now-light `--ink` */
 
   --line:         #f1f1ee;

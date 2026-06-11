@@ -4,25 +4,29 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "@/lib/api";
-import { hasUser } from "@/lib/auth";
+import { hasUser, getUsername, guestMustRegister } from "@/lib/auth";
 import { QUESTION_DIFFICULTY_CONFIG, type QuestionDifficulty } from "@/lib/types";
 import { fadeUp, scaleIn, stagger } from "@/lib/motion";
 import PageShell from "../components/PageShell";
 import {
   Users, DoorOpen, BookOpen, Hash, Brain,
   AlertTriangle, ArrowRight, Bot, Leaf, Target, Skull,
-  Key, Timer,
+  Key, Timer, Swords,
 } from "lucide-react";
 
 function QuestionDifficultyIcon({ d }: { d: QuestionDifficulty }) {
   if (d === "easy") return <Leaf size={18} />;
   if (d === "medium") return <Target size={18} />;
-  return <Skull size={18} />;
+  if (d === "hard") return <Skull size={18} />;
+  return <Swords size={18} />;
 }
 
 export default function MultiplayerPage() {
   const router = useRouter();
-  useEffect(() => { if (!hasUser()) router.replace("/"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!hasUser()) { router.replace("/"); return; }
+    if (guestMustRegister()) { router.replace("/login?reason=trial_used"); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -46,11 +50,13 @@ export default function MultiplayerPage() {
 
   async function handleCreate() {
     if (tags.length === 0) { setCreateError("Add at least one topic!"); return; }
+    const username = getUsername();
+    if (!username) { setCreateError("Pick a name first"); return; }
     setCreateError("");
     setCreating(true);
     try {
       const genRes = await api.generateQuestions(tags, count, questionDifficulty);
-      const roomRes = await api.createRoom(genRes.questions, tags);
+      const roomRes = await api.createRoom(genRes.questions, tags, username, questionDifficulty);
       sessionStorage.setItem(`qrio_questions_${roomRes.room_code}`, JSON.stringify(genRes.questions));
       sessionStorage.setItem(`qrio_host_${roomRes.room_code}`, "true");
       sessionStorage.setItem(`qrio_tags_${roomRes.room_code}`, JSON.stringify(tags));
@@ -152,7 +158,7 @@ export default function MultiplayerPage() {
                 <Brain size={13} /> Question Difficulty
               </label>
               <p className="text-xs text-ink-faint mb-2 font-medium">How hard should the AI make the questions?</p>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {(Object.keys(QUESTION_DIFFICULTY_CONFIG) as QuestionDifficulty[]).map((d) => {
                   const cfg = QUESTION_DIFFICULTY_CONFIG[d];
                   const active = questionDifficulty === d;

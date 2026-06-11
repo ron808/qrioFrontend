@@ -4,12 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "@/lib/api";
-import { hasUser, getHomePath } from "@/lib/auth";
-import { saveSoloGame } from "@/lib/stats";
+import { hasUser, getHomePath, isLoggedIn, incrementGuestGamesPlayed, guestMustRegister } from "@/lib/auth";
+import { saveSoloGame, qDiffMultiplier } from "@/lib/stats";
 import { fadeUp, scaleIn, stagger } from "@/lib/motion";
 import PageShell from "../components/PageShell";
 import {
-  Target, Leaf, Skull, Infinity as InfinityIcon, Flame, Timer,
+  Target, Leaf, Skull, Swords, Infinity as InfinityIcon, Flame, Timer,
   BookOpen, Hash, Brain, AlertTriangle, ArrowRight, Check, X,
   Trophy, Star, ThumbsUp, RotateCcw, Home, ChevronDown, Bot, SkipForward,
 } from "lucide-react";
@@ -30,7 +30,8 @@ const TRANSITION_MS = 1500;
 function QuestionDifficultyIcon({ d }: { d: QuestionDifficulty }) {
   if (d === "easy") return <Leaf size={20} />;
   if (d === "medium") return <Target size={20} />;
-  return <Skull size={20} />;
+  if (d === "hard") return <Skull size={20} />;
+  return <Swords size={20} />;
 }
 
 function TimerDifficultyIcon({ d }: { d: Difficulty }) {
@@ -120,7 +121,10 @@ function QuestionTransition({ nextNum, total }: { nextNum: number; total: number
 
 export default function SoloPage() {
   const router = useRouter();
-  useEffect(() => { if (!hasUser()) router.replace("/"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!hasUser()) { router.replace("/"); return; }
+    if (guestMustRegister()) { router.replace("/login?reason=trial_used"); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -283,6 +287,9 @@ export default function SoloPage() {
         longestStreak: bestStreak,
         speedBonus: speedBonusAccum,
       });
+      // Guests get a finite free-trial; bump the counter so the home page
+      // can prompt them to register after the limit.
+      if (!isLoggedIn()) incrementGuestGamesPlayed();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
@@ -291,7 +298,7 @@ export default function SoloPage() {
   const pct = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0;
   const stars = pct >= 80 ? 3 : pct >= 60 ? 2 : pct >= 40 ? 1 : 0;
   const messages = ["Keep going!", "Good effort!", "Nice work!", "Brilliant!"];
-  const finalScore = correctCount * 10 * (questionDifficulty === "easy" ? 1 : questionDifficulty === "medium" ? 1.5 : 2)
+  const finalScore = correctCount * 10 * qDiffMultiplier(questionDifficulty)
     + correctCount * (difficulty === "none" ? 0 : difficulty === "easy" ? 2 : difficulty === "medium" ? 4 : 8)
     + speedBonusAccum;
 
@@ -372,7 +379,7 @@ export default function SoloPage() {
                 <Brain size={14} /> Question Difficulty
               </label>
               <p className="text-xs text-ink-faint mb-3 font-medium">How hard should the AI make the questions?</p>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 {(Object.keys(QUESTION_DIFFICULTY_CONFIG) as QuestionDifficulty[]).map((d) => {
                   const cfg = QUESTION_DIFFICULTY_CONFIG[d];
                   const active = questionDifficulty === d;

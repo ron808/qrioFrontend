@@ -76,10 +76,15 @@ function addTopics(stats: Stats, topics: string[]) {
 // (Easy 1×, Medium 1.5×, Hard 2×). For solo only, an optional time bonus is
 // added per correct answer scaled by how fast the player answered.
 const QDIFF_MULTIPLIER: Record<QuestionDifficulty, number> = {
-  easy:   1,
-  medium: 1.5,
-  hard:   2,
+  easy:    1,
+  medium:  1.5,
+  hard:    2,
+  spartan: 3,
 };
+
+export function qDiffMultiplier(d: QuestionDifficulty): number {
+  return QDIFF_MULTIPLIER[d] ?? 1;
+}
 
 const TIMER_BONUS: Record<Difficulty, number> = {
   none:   0,
