@@ -1,6 +1,6 @@
 import type { Question, QuestionDifficulty, User } from "./types";
 
-const PROD_API_URL = "https://qrio-backend-latest.onrender.com";
+const PROD_API_URL = "https://qrio-api.onrender.com";
 const LOCALHOST_RE = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i;
 
 function isLanHost(hostname: string): boolean {
