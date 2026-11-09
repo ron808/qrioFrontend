@@ -37,7 +37,6 @@ export default function PageShell({
         variants={pageTransition}
         initial="hidden"
         animate="show"
-        exit="exit"
         className={`flex-1 flex flex-col ${className}`}
       >
         {children}

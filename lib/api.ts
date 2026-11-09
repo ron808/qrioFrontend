@@ -45,6 +45,11 @@ function getApiBase(): string {
   return PROD_API_URL;
 }
 
+/** True when the app is being served from this machine or the local network. */
+export function isLocalDev(): boolean {
+  return typeof window !== "undefined" && isLanHost(window.location.hostname);
+}
+
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("qrio_token");
@@ -61,8 +66,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     },
   });
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Something went wrong");
+  // A cold or crashed backend can answer with an HTML error page, so don't
+  // assume the body is JSON.
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || `Server error (${res.status}). Please try again.`);
+  if (data === null) throw new Error("The server sent an unreadable response.");
   return data as T;
 }
 
@@ -85,38 +93,53 @@ export const api = {
       body: JSON.stringify({ tags, count, question_difficulty: questionDifficulty }),
     }),
 
+  // The server generates and keeps the questions so the host never sees the answers.
   createRoom: (
-    questions: Question[],
     tags: string[],
+    count: number,
     hostUsername: string,
     questionDifficulty: QuestionDifficulty = "medium",
   ) =>
     request<{ room_code: string; session_id: number }>("/api/room/create", {
       method: "POST",
       body: JSON.stringify({
-        questions,
         tags,
+        count,
         host_username: hostUsername,
         question_difficulty: questionDifficulty,
       }),
     }),
 
   changePassword: (oldPassword: string, newPassword: string) =>
-    request<{ message: string }>("/api/auth/change-password", {
+    // The server signs out other sessions and returns a fresh token for this one.
+    request<{ message: string; token: string }>("/api/auth/change-password", {
       method: "POST",
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
     }),
 
-  forgotPassword: (email: string, newPassword: string) =>
+  /** Step 1 of a reset: the server issues a one-time code for this email. */
+  forgotPassword: (email: string) =>
     request<{ message: string }>("/api/auth/forgot-password", {
       method: "POST",
-      body: JSON.stringify({ email, new_password: newPassword }),
+      body: JSON.stringify({ email }),
+    }),
+
+  /** Step 2 of a reset: trade the code for a new password. */
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<{ message: string }>("/api/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ email, code, new_password: newPassword }),
     }),
 };
 
-export function createWebSocket(roomCode: string, username: string): WebSocket {
+/**
+ * `rejoinToken` is the secret the server handed this browser on its first
+ * join; it lets the same player reclaim their seat (and score) after a drop
+ * without letting anyone else take the name.
+ */
+export function createWebSocket(roomCode: string, username: string, rejoinToken?: string | null): WebSocket {
   const wsBase = getApiBase().replace(/^http/, "ws");
-  return new WebSocket(
-    `${wsBase}/ws?room=${encodeURIComponent(roomCode)}&username=${encodeURIComponent(username)}`
-  );
+  const params = new URLSearchParams({ room: roomCode, username });
+  if (rejoinToken) params.set("token", rejoinToken);
+  return new WebSocket(`${wsBase}/ws?${params}`);
 }
