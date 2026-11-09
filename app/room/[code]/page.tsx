@@ -1,140 +1,64 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { useRouter } from "@/lib/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { api, createWebSocket } from "@/lib/api";
+import { createWebSocket } from "@/lib/api";
 import {
-  getUsername, hasUser, getHomePath, isLoggedIn, incrementGuestGamesPlayed,
+  getUsername, hasUser, getHomePath, isLoggedIn, incrementGuestGamesPlayed, guestMustRegister,
 } from "@/lib/auth";
-import { fadeUp, scaleIn, stagger } from "@/lib/motion";
+import { EASE, fadeUp, stagger } from "@/lib/motion";
 import {
   DIFFICULTY_CONFIG,
   MULTI_DIFFICULTIES,
   QUESTION_DIFFICULTY_CONFIG,
+  type AnswerBreakdown,
+  type Commentary,
   type GamePhase,
   type LeaderboardEntry,
   type PlayerCounts,
   type PlayerScores,
-  type Question,
   type QuestionDifficulty,
+  type RoomQuestion,
+  type WSAnswerResult,
+  type WSError,
   type WSGameFinished,
+  type WSHostChanged,
   type WSMessage,
   type WSNewGameReady,
   type WSNextQuestion,
   type WSPlayerAnswered,
   type WSPlayerJoined,
   type WSPlayerLeft,
-  type WSPlayerList,
   type WSPlayerSkipped,
+  type WSQuestionClosed,
   type WSRoomState,
   type WSStartGame,
   type WSVoteDifficulty,
 } from "@/lib/types";
-import { saveMultiplayerGame } from "@/lib/stats";
+import { qDiffMultiplier, saveMultiplayerGame } from "@/lib/stats";
+import { RIGHT_HEADLINES, WRONG_HEADLINES, calloutFor, pick, resultGrid, teacherComment, type Callout } from "@/lib/fun";
+import { buzz, play } from "@/lib/sound";
+import { pulseDots, pulseFrom } from "@/lib/pulse";
+import Confetti from "../../components/Confetti";
+import ShareDialog from "../../components/ShareDialog";
+import Logo from "../../components/Logo";
+import Modal from "../../components/Modal";
+import Notice from "../../components/Notice";
+import ThemeToggle from "../../components/ThemeToggle";
+import { Avatar } from "../../components/Navbar";
 import {
-  Copy, Users, Hash, Timer, Trophy, Check, X,
-  Leaf, Flame, Infinity as InfinityIcon, Play, RotateCcw, Home,
-  ChevronDown, Crown, ArrowRight, Wifi, AlertTriangle,
-  SkipForward, Loader2, BookOpen, Brain, Bot, Target, Skull, Swords,
+  FeedbackBar, OptionButton, ProgressTicks, QuestionSheet, QuestionTransition, SoundToggle, TimerRing,
+  REVEAL_MS, STAMP_DELAY, TRANSITION_MS, useKeepAboveFeedback, type OptionState,
+} from "../../components/GameUI";
+import {
+  ChoiceGrid, CountSlider, TopicInput, QUESTION_DIFFICULTY_CHOICES, timerIcon,
+} from "../../components/QuizSettings";
+import {
+  AlertTriangle, ArrowRight, Check, ChevronDown, Copy, Crown, Flame, Home, Lightbulb, Link2, Loader2,
+  LogOut, Play, RotateCcw, Share2, SkipForward, Wifi, X,
 } from "lucide-react";
-
-const OPTION_LABELS = ["A", "B", "C", "D"];
-const TRANSITION_MS = 1500;
-
-function TimerDifficultyIcon({ seconds }: { seconds: number }) {
-  if (seconds === 0) return <InfinityIcon size={20} />;
-  if (seconds >= 25) return <Leaf size={20} />;
-  if (seconds >= 12) return <Timer size={20} />;
-  return <Flame size={20} />;
-}
-
-function QuestionDifficultyIcon({ d }: { d: QuestionDifficulty }) {
-  if (d === "easy") return <Leaf size={18} />;
-  if (d === "medium") return <Target size={18} />;
-  if (d === "hard") return <Skull size={18} />;
-  return <Swords size={18} />;
-}
-
-function CircularTimer({ seconds, total }: { seconds: number; total: number }) {
-  const r = 32;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (seconds / total) * circ;
-  const dangerZone = seconds <= 5;
-  const warnZone = !dangerZone && seconds <= Math.floor(total * 0.4);
-  const stroke = dangerZone ? "var(--accent-red)" : warnZone ? "var(--accent-amber)" : "var(--ink)";
-  return (
-    <div className="relative w-20 h-20">
-      <svg className="w-20 h-20 -rotate-90" viewBox="0 0 72 72">
-        <circle cx="36" cy="36" r={r} fill="none" stroke="var(--line-soft)" strokeWidth="6" />
-        <circle
-          cx="36" cy="36" r={r} fill="none"
-          stroke={stroke} strokeWidth="6" strokeLinecap="square"
-          strokeDasharray={circ} strokeDashoffset={offset}
-          style={{ transition: "stroke-dashoffset 1s linear, stroke 0.3s" }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <motion.span
-          key={seconds}
-          initial={{ scale: 1.4, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.2 }}
-          className="text-2xl font-black tabular-nums"
-          style={{ color: stroke }}
-        >
-          {seconds}
-        </motion.span>
-      </div>
-    </div>
-  );
-}
-
-function QuestionTransition({ nextNum, total }: { nextNum: number; total: number }) {
-  const [progress, setProgress] = useState(0);
-  useEffect(() => {
-    const start = Date.now();
-    const id = setInterval(() => {
-      const elapsed = Date.now() - start;
-      const p = Math.min(elapsed / TRANSITION_MS, 1);
-      setProgress(p);
-      if (p >= 1) clearInterval(id);
-    }, 16);
-    return () => clearInterval(id);
-  }, []);
-
-  const r = 30;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - progress * circ;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="min-h-screen flex flex-col items-center justify-center gap-5"
-    >
-      <div className="relative w-24 h-24">
-        <svg className="w-24 h-24 -rotate-90" viewBox="0 0 72 72">
-          <circle cx="36" cy="36" r={r} fill="none" stroke="var(--line-soft)" strokeWidth="5" />
-          <circle
-            cx="36" cy="36" r={r} fill="none" stroke="var(--ink)" strokeWidth="5"
-            strokeLinecap="square" strokeDasharray={circ}
-            strokeDashoffset={offset}
-          />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-lg font-black text-ink">{nextNum}</span>
-        </div>
-      </div>
-      <div className="text-center">
-        <p className="font-heading text-2xl text-ink">Question {nextNum} of {total}</p>
-        <p className="text-ink-muted text-sm font-medium mt-1">Get ready…</p>
-      </div>
-    </motion.div>
-  );
-}
 
 function calcTimer(votes: Record<string, number>): number {
   const vals = Object.values(votes);
@@ -143,236 +67,244 @@ function calcTimer(votes: Record<string, number>): number {
   return Math.max(8, Math.min(30, Math.round(avg)));
 }
 
-// Compact horizontal scoreboard for mobile during play. Shows everyone's
-// score with the current player highlighted.
-function MobileScoreStrip({
+const ORDINAL = (n: number) => {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
+/** Live scores: a swipeable strip on phones, a column beside the question on desktop. */
+function Scoreboard({
   sortedScores,
   myUsername,
   respondedUsers,
+  variant,
 }: {
   sortedScores: [string, number][];
   myUsername: string;
   respondedUsers: Set<string>;
+  variant: "strip" | "column";
 }) {
+  if (variant === "strip") {
+    return (
+      <div className="lg:hidden border-b-2 border-ink bg-card-soft">
+        <div className="max-w-2xl mx-auto flex items-center gap-2 overflow-x-auto no-scrollbar px-4 py-2.5">
+          {sortedScores.map(([name, score], i) => {
+            const isMe = name === myUsername;
+            return (
+              <motion.div
+                key={name}
+                layout
+                className={`flex items-center gap-1.5 shrink-0 rounded-full border-2 pl-1 pr-3 py-0.5 text-sm font-extrabold ${
+                  isMe ? "border-ink bg-hl text-hl-ink" : "border-line-soft bg-card text-ink"
+                }`}
+              >
+                <span className="w-6 text-center text-xs tabular-nums opacity-70">{i + 1}</span>
+                <span className="truncate max-w-[6.5rem]">{isMe ? "You" : name}</span>
+                <motion.span key={score} initial={{ scale: 1.3 }} animate={{ scale: 1 }} className="tabular-nums">{score}</motion.span>
+                <span
+                  aria-label={respondedUsers.has(name) ? "answered" : "thinking"}
+                  className="w-2 h-2 rounded-full"
+                  style={{ background: respondedUsers.has(name) ? "var(--good-mark)" : "var(--line-soft)" }}
+                />
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className="md:hidden flex items-center gap-2 overflow-x-auto px-3 py-2 border-b-2 border-ink bg-card">
-      <Trophy size={14} className="text-ink-soft shrink-0" />
-      {sortedScores.map(([name, score], i) => {
-        const isMe = name === myUsername;
-        return (
-          <motion.div
-            key={name}
-            layout
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border-2 text-xs font-black shrink-0 ${
-              isMe ? "bg-ink text-on-ink border-ink" : "bg-card border-line-soft text-ink"
-            }`}
-          >
-            <span className="text-[10px] opacity-70">#{i + 1}</span>
-            <span className="truncate max-w-[80px]">{isMe ? "You" : name}</span>
-            <motion.span key={score} initial={{ scale: 1.3 }} animate={{ scale: 1 }} className="tabular-nums">
-              {score}
-            </motion.span>
-            <span className={`w-1.5 h-1.5 rounded-full ${respondedUsers.has(name) ? "bg-emerald-500" : "bg-line-soft"}`} />
-          </motion.div>
-        );
-      })}
-    </div>
+    <aside className="hidden lg:block w-64 shrink-0">
+      <div className="sticky top-24 sketch-card p-4">
+        <h2 className="font-heading text-lg text-ink mb-3">Scores</h2>
+        <ol className="space-y-1">
+          <AnimatePresence initial={false}>
+            {sortedScores.map(([name, score], i) => {
+              const isMe = name === myUsername;
+              return (
+                <motion.li
+                  key={name}
+                  layout
+                  transition={{ duration: 0.35, ease: EASE }}
+                  className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${isMe ? "bg-hl-soft" : ""}`}
+                >
+                  <span className="w-4 text-center text-xs font-extrabold text-ink-muted tabular-nums">{i + 1}</span>
+                  <Avatar name={name} size={26} />
+                  <span className="flex-1 min-w-0 truncate text-sm font-extrabold text-ink">{isMe ? "You" : name}</span>
+                  <motion.span
+                    key={score}
+                    initial={{ scale: 1.3, color: "var(--good)" }}
+                    animate={{ scale: 1, color: "var(--ink)" }}
+                    transition={{ duration: 0.4 }}
+                    className="text-sm font-extrabold tabular-nums"
+                  >
+                    {score}
+                  </motion.span>
+                  {respondedUsers.has(name)
+                    ? <Check size={14} strokeWidth={3} className="text-good shrink-0" aria-label="answered" />
+                    : <span className="w-3.5 h-3.5 shrink-0 rounded-full border-2 border-line-soft" aria-label="thinking" />}
+                </motion.li>
+              );
+            })}
+          </AnimatePresence>
+        </ol>
+      </div>
+    </aside>
   );
 }
 
-// Modal shown to the host on the results screen to set up the next round in
-// the same room.
+/** Host's dialog on the results screen to start another round in this room. */
 function NewRoundDialog({
+  open,
   onClose,
   onStart,
 }: {
+  open: boolean;
   onClose: () => void;
   onStart: (params: { tags: string[]; count: number; questionDifficulty: QuestionDifficulty }) => Promise<void>;
 }) {
-  const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [count, setCount] = useState(5);
   const [qd, setQd] = useState<QuestionDifficulty>("medium");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  function addTag(raw: string) {
-    const t = raw.trim().replace(/,+$/, "");
-    if (t && !tags.includes(t) && tags.length < 10) setTags((p) => [...p, t]);
-    setTagInput("");
-  }
-
   async function handleStart() {
-    if (tags.length === 0) { setErr("Add at least one topic"); return; }
+    if (tags.length === 0) { setErr("Add at least one topic."); return; }
     setErr("");
     setBusy(true);
     try {
       await onStart({ tags, count, questionDifficulty: qd });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to start round");
+      setErr(e instanceof Error ? e.message : "Couldn't start the round.");
       setBusy(false);
     }
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.85, y: 20 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.85, y: 20 }}
-        transition={{ type: "spring", stiffness: 320, damping: 22 }}
-        className="sketch-card p-5 sm:p-6 w-full max-w-md space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="font-heading text-2xl text-ink">New Round</h3>
-            <p className="text-ink-muted text-xs font-medium">Same room, fresh questions</p>
-          </div>
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="text-ink-faint hover:text-ink p-1 focus-ring rounded-md"
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <div>
-          <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-2">
-            <BookOpen size={12} /> Topics
-          </label>
-          <div
-            className="flex flex-wrap gap-2 p-3 sketch-inset min-h-[48px] cursor-text"
-            onClick={() => document.getElementById("nr-tag-input")?.focus()}
-          >
-            <AnimatePresence>
-              {tags.map((tag, i) => (
-                <motion.span
-                  key={tag}
-                  layout
-                  initial={{ opacity: 0, scale: 0.6 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.6 }}
-                  className="flex items-center gap-1 bg-ink text-on-ink text-xs px-2.5 py-1 rounded-full font-bold"
-                >
-                  {tag}
-                  <button onClick={() => setTags((p) => p.filter((_, j) => j !== i))} aria-label={`Remove ${tag}`}>×</button>
-                </motion.span>
-              ))}
-            </AnimatePresence>
-            <input
-              id="nr-tag-input"
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); }
-                if (e.key === "Backspace" && !tagInput && tags.length) setTags((p) => p.slice(0, -1));
-              }}
-              onBlur={() => tagInput.trim() && addTag(tagInput)}
-              placeholder={tags.length === 0 ? "Type a topic, press Enter…" : "Add more…"}
-              className="flex-1 min-w-[120px] bg-transparent outline-none text-sm text-ink placeholder-ink-ghost"
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-2">
-            <Hash size={12} /> Questions: <span className="text-ink ml-1">{count}</span>
-          </label>
-          <input type="range" min={3} max={20} value={count} onChange={(e) => setCount(+e.target.value)} className="w-full" />
-        </div>
-
-        <div>
-          <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-2">
-            <Brain size={12} /> Difficulty
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            {(Object.keys(QUESTION_DIFFICULTY_CONFIG) as QuestionDifficulty[]).map((d) => {
-              const cfg = QUESTION_DIFFICULTY_CONFIG[d];
-              const active = qd === d;
-              return (
-                <button
-                  key={d}
-                  onClick={() => setQd(d)}
-                  className={`flex items-center justify-center gap-2 py-2 rounded-xl border-2 font-bold text-xs ${
-                    active ? cfg.activeClass : "border-line-soft text-ink-muted bg-card hover:border-ink hover:text-ink"
-                  }`}
-                >
-                  <QuestionDifficultyIcon d={d} />
-                  {cfg.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {err && (
-          <p className="text-red-600 dark:text-red-400 text-xs font-bold flex items-center gap-1.5">
-            <AlertTriangle size={12} /> {err}
-          </p>
-        )}
-
-        <motion.button
-          onClick={handleStart}
-          disabled={busy}
-          whileTap={{ scale: 0.97 }}
-          whileHover={{ y: -1 }}
-          className="w-full sketch-btn-dark gap-2 py-3 focus-ring"
-        >
-          {busy ? <><Bot size={15} className="animate-spin-slow" /> Generating…</> : <>Start New Round <ArrowRight size={14} /></>}
-        </motion.button>
-      </motion.div>
-    </motion.div>
+    <Modal open={open} onClose={onClose} locked={busy} title="New round" subtitle="Same room, fresh questions" icon={<RotateCcw size={20} />}>
+      <div className="space-y-6">
+        <TopicInput tags={tags} onChange={setTags} suggestions={false} />
+        <CountSlider value={count} onChange={setCount} />
+        <ChoiceGrid label="Question difficulty" options={QUESTION_DIFFICULTY_CHOICES} value={qd} onChange={setQd} columns="grid-cols-2" />
+        <Notice>{err}</Notice>
+        <button onClick={handleStart} disabled={busy} className="w-full sketch-btn-accent gap-2 h-12 text-base focus-ring">
+          {busy ? <><Loader2 size={18} className="animate-spin" /> Writing questions…</> : <>Start the round <ArrowRight size={18} /></>}
+        </button>
+      </div>
+    </Modal>
   );
 }
+
+// Keyed by name too, so two tabs playing as different people don't clobber each other.
+const REJOIN_KEY = (room: string, name: string) => `qrio_rejoin_${room}_${name.toLowerCase()}`;
+
+function readRejoinToken(room: string, name: string): string | null {
+  try { return localStorage.getItem(REJOIN_KEY(room, name)); } catch { return null; }
+}
+function saveRejoinToken(room: string, name: string, token: string) {
+  try { localStorage.setItem(REJOIN_KEY(room, name), token); } catch { /* storage unavailable */ }
+}
+function clearRejoinToken(room: string, name: string) {
+  try { localStorage.removeItem(REJOIN_KEY(room, name)); } catch { /* storage unavailable */ }
+}
+
+// navigator.clipboard only exists on https/localhost pages, and it can still
+// refuse (permissions, embedded browsers), so fall back to the textarea trick.
+async function copyText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch { /* fall through */ }
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  if (!ok) throw new Error("Copy failed");
+}
+
+// Close codes after which retrying can't help.
+const FATAL_CLOSE: Record<number, string> = {
+  4000: "This room is open in another tab or window. Keep playing there.",
+  4400: "That name can't be used in a room. Pick a different one.",
+  4404: "This room no longer exists. Ask the host for a fresh code.",
+  4409: "That name is already taken in this room. Pick a different one.",
+  4413: "This room is full.",
+};
 
 export default function RoomPage() {
   const params = useParams();
   const router = useRouter();
   const roomCode = (params.code as string).toUpperCase();
-  const myUsername = useRef(getUsername());
+  // Read once on the client; the name can't change while the page is open.
+  const [myUsername] = useState(() => getUsername());
   const ws = useRef<WebSocket | null>(null);
 
-  useEffect(() => { if (!hasUser()) router.replace("/"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!hasUser()) { router.replace("/"); return; }
+    if (guestMustRegister()) router.replace("/login?reason=trial_used");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [phase, setPhase] = useState<GamePhase>("connecting");
   const [error, setError] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [players, setPlayers] = useState<string[]>([]);
   const [scores, setScores] = useState<PlayerScores>({});
   const [correctCounts, setCorrectCounts] = useState<PlayerCounts>({});
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [questions, setQuestions] = useState<RoomQuestion[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
   const [answered, setAnswered] = useState<number | null>(null);
   const [myResult, setMyResult] = useState<boolean | null>(null);
+  // The right option for the current question, once the server reveals it to us.
+  const [correctIndex, setCorrectIndex] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);
   const [timerSeconds, setTimerSeconds] = useState(15);
   const [isHost, setIsHost] = useState(false);
+  const [hostUsername, setHostUsername] = useState("");
   const [myVoteSeconds, setMyVoteSeconds] = useState(15);
   const [votes, setVotes] = useState<Record<string, number>>({});
-  const [questionAnswers, setQuestionAnswers] = useState<Record<number, Record<string, boolean>>>({});
+  const [questionAnswers, setQuestionAnswers] = useState<AnswerBreakdown>({});
   const [copied, setCopied] = useState(false);
 
   const [respondedUsers, setRespondedUsers] = useState<Set<string>>(new Set());
   const [inTransition, setInTransition] = useState(false);
-  const [advanceTrigger, setAdvanceTrigger] = useState(0);
+  // The marking for the current question: its commentary, once we may see it,
+  // and whether the question has closed for everyone.
+  const [reveal, setReveal] = useState<Commentary | null>(null);
+  const [closed, setClosed] = useState(false);
+  const [stamp, setStamp] = useState<Callout | null>(null);
+  const [myStreak, setMyStreak] = useState(0);
+  const [lostStreak, setLostStreak] = useState(0);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const reconnectCount = useRef(0);
   const intentionalClose = useRef(false);
   const phaseRef = useRef<GamePhase>("connecting");
   const currentQRef = useRef(0);
-  const questionsRef = useRef<Question[]>([]);
+  const timerSecondsRef = useRef(15);
+  const myVoteRef = useRef(15);
   const inTransitionRef = useRef(false);
-  const advanceTriggerHandled = useRef(-1);
-  const guestCountedRef = useRef(false);
+  const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** When the current question closes, in local clock time. Drives the countdown. */
+  const deadlineRef = useRef(0);
+  const statsSaved = useRef(false);
+  // Read from the socket handler, which only sees refs.
+  const answeredRef = useRef<number | null>(null);
+  const streakRef = useRef(0);
+  const missRunRef = useRef(0);
+  const questionStart = useRef(0);
+  const pickedEl = useRef<HTMLElement | null>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
+  const lastTick = useRef(0);
+  const pendingNewRound = useRef<{ resolve: () => void; reject: (e: Error) => void } | null>(null);
 
   const [roomTags, setRoomTags] = useState<string[]>([]);
   const [roomQDiff, setRoomQDiff] = useState<QuestionDifficulty>("medium");
@@ -386,129 +318,149 @@ export default function RoomPage() {
 
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { currentQRef.current = currentQ; }, [currentQ]);
-  useEffect(() => { questionsRef.current = questions; }, [questions]);
+  useEffect(() => { timerSecondsRef.current = timerSeconds; }, [timerSeconds]);
+  useEffect(() => { answeredRef.current = answered; }, [answered]);
 
-  useEffect(() => {
-    const stored = sessionStorage.getItem(`qrio_tags_${roomCode}`);
-    if (stored) {
-      try { setRoomTags(JSON.parse(stored) as string[]); } catch { /* ignore */ }
-    }
-    const qd = sessionStorage.getItem(`qrio_qdiff_${roomCode}`);
-    if (qd === "easy" || qd === "medium" || qd === "hard" || qd === "spartan") setRoomQDiff(qd);
-  }, [roomCode]);
-
-  // Persist stats once per game completion. Uses server's correct_count so it
-  // matches what other players see.
-  const statsSaved = useRef(false);
-  useEffect(() => {
-    if (phase !== "results" || !myUsername.current || statsSaved.current) return;
-    if (!finalLeaderboard) return;
-    statsSaved.current = true;
-    const me = finalLeaderboard.find((e) => e.username === myUsername.current);
-    if (!me) return;
-    saveMultiplayerGame({
-      topics: roomTags,
-      correct: me.correct_count,
-      total: questionsRef.current.length,
-      rank: me.rank,
-      totalPlayers: finalLeaderboard.length,
-      questionDifficulty: roomQDiff,
-    });
-    if (!isLoggedIn() && !guestCountedRef.current) {
-      guestCountedRef.current = true;
-      incrementGuestGamesPlayed();
-    }
-  }, [phase, finalLeaderboard]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function sendWS(data: object) {
-    if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(data));
+  function sendWS(data: object): boolean {
+    if (ws.current?.readyState !== WebSocket.OPEN) return false;
+    ws.current.send(JSON.stringify(data));
+    return true;
   }
 
-  useEffect(() => {
-    if (advanceTrigger === 0 || advanceTrigger === advanceTriggerHandled.current) return;
-    if (phaseRef.current !== "playing") return;
-    if (inTransitionRef.current) return;
+  function startCountdown(ms: number) {
+    deadlineRef.current = Date.now() + ms;
+    setTimeLeft(Math.ceil(ms / 1000));
+  }
 
-    advanceTriggerHandled.current = advanceTrigger;
-    inTransitionRef.current = true;
-    setInTransition(true);
+  function cancelTransition() {
+    if (transitionTimer.current) clearTimeout(transitionTimer.current);
+    transitionTimer.current = null;
+    inTransitionRef.current = false;
+    setInTransition(false);
+  }
 
-    const nextQ = currentQRef.current + 1;
+  function resetQuestionState() {
+    setAnswered(null);
+    setMyResult(null);
+    setCorrectIndex(null);
+    setRespondedUsers(new Set());
+    setReveal(null);
+    setClosed(false);
+    setStamp(null);
+    setLostStreak(0);
+    pickedEl.current = null;
+    questionStart.current = Date.now();
+  }
 
-    setTimeout(() => {
-      if (nextQ >= questionsRef.current.length) {
-        // The server now sends game_finished and bumps to results. Stay here
-        // and wait for that message rather than racing it.
-      } else {
-        setCurrentQ(nextQ);
-        setAnswered(null);
-        setMyResult(null);
-        setRespondedUsers(new Set());
-      }
-      setInTransition(false);
-      inTransitionRef.current = false;
-    }, TRANSITION_MS);
-  }, [advanceTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
+  function resetStreak() {
+    streakRef.current = 0;
+    missRunRef.current = 0;
+    setMyStreak(0);
+  }
+
+  /** The current question went by without a right answer from us. */
+  function breakStreak() {
+    setLostStreak(streakRef.current);
+    streakRef.current = 0;
+    missRunRef.current += 1;
+    setMyStreak(0);
+  }
+
+  /** Our answer came back marked: streak, stamp, sound, a ripple from the option we tapped. */
+  function markMine(correct: boolean) {
+    const el = pickedEl.current;
+    if (!correct) {
+      breakStreak();
+      play("wrong");
+      buzz([40, 30, 40]);
+      pulseFrom(el, { tone: "bad", shake: true });
+      return;
+    }
+    const streakNow = streakRef.current + 1;
+    streakRef.current = streakNow;
+    setMyStreak(streakNow);
+    const callout = calloutFor({
+      streak: streakNow,
+      elapsed: (Date.now() - questionStart.current) / 1000,
+      secondsLeft: (deadlineRef.current - Date.now()) / 1000,
+      missesBefore: missRunRef.current,
+      timerSeconds: timerSecondsRef.current,
+    });
+    missRunRef.current = 0;
+    setStamp(callout);
+    play("correct");
+    pulseFrom(el, { tone: "good", strength: 0.9 });
+    if (callout) {
+      window.setTimeout(() => {
+        play(callout.tone === "hl" ? "streak" : "stamp");
+        pulseFrom(el, { tone: "hl", strength: 0.7 });
+      }, STAMP_DELAY * 1000);
+    }
+  }
 
   const handleMessage = useCallback((msg: WSMessage) => {
     switch (msg.type) {
       case "room_state": {
         // Authoritative snapshot. Fires on every (re)connect.
         const m = msg as WSRoomState;
+        saveRejoinToken(roomCode, myUsername, m.rejoin_token);
+        cancelTransition();
         setPlayers(m.players);
         setScores(m.scores);
         setCorrectCounts(m.correct_counts);
-        if (m.votes) setVotes(m.votes);
+        setVotes(m.votes ?? {});
         setIsHost(m.you_are_host);
+        setHostUsername(m.host_username);
         setTimerSeconds(m.timer_seconds);
         setRoomQDiff(m.question_difficulty);
-        if (m.tags && m.tags.length > 0) setRoomTags(m.tags);
-        if (m.questions && m.questions.length > 0) setQuestions(m.questions);
+        setRoomTags(m.tags ?? []);
+        if (m.questions) setQuestions(m.questions);
 
         if (m.phase === "lobby") {
-          // Clear any stale game state when bouncing back to lobby.
           setFinalLeaderboard(null);
           setQuestionAnswers({});
-          if (phaseRef.current !== "lobby") setPhase("lobby");
+          setPhase("lobby");
+          // The server forgets votes from dropped connections, so re-send ours.
+          sendWS({ type: "vote_difficulty", seconds: myVoteRef.current });
+          if (pendingNewRound.current) {
+            pendingNewRound.current.resolve();
+            pendingNewRound.current = null;
+            setShowNewRound(false);
+          }
         } else if (m.phase === "playing") {
-          // Mid-game rejoin. We don't know WHICH option they picked (server
-          // only tracks "answered yes/no"), so use a sentinel that locks the
-          // UI without claiming any specific option. -1 means skipped; -3
-          // means "answered but choice unknown — show 'Locked in' fallback".
+          // Mid-game (re)join: pick up the server's clock and our own answer, if any.
           setCurrentQ(m.current_question);
-          const alreadyAnswered = m.my_answered.includes(m.current_question);
-          const alreadySkipped = m.my_skipped.includes(m.current_question);
-          if (alreadySkipped) {
+          const mine = m.my_current_answer;
+          setRespondedUsers(new Set());
+          if (mine) {
+            setAnswered(mine.selected);
+            setMyResult(mine.is_correct);
+            setCorrectIndex(mine.correct_index);
+            setRespondedUsers(new Set([myUsername]));
+          } else if (m.my_skipped.includes(m.current_question)) {
             setAnswered(-1);
-          } else if (alreadyAnswered) {
-            setAnswered(-3);
+            setMyResult(null);
+            setCorrectIndex(null);
+            setRespondedUsers(new Set([myUsername]));
           } else {
-            setAnswered(null);
+            resetQuestionState();
           }
-          setMyResult(null);
-          // Pre-populate respondedUsers with myself if I already responded so
-          // the "waiting for others" overlay fires immediately.
-          if (alreadyAnswered || alreadySkipped) {
-            setRespondedUsers((prev) => new Set([...prev, myUsername.current]));
+          if (mine?.reveal) setReveal(mine.reveal);
+          // Rejoined while the marked question is on screen.
+          const shut = m.closed_question;
+          if (shut) {
+            setClosed(true);
+            setCorrectIndex(shut.correct_index);
+            setReveal(shut.reveal ?? null);
           }
+          startCountdown(m.time_left_ms ?? m.timer_seconds * 1000);
           setPhase("playing");
-        } else if (m.phase === "post_game") {
-          // Rejoined after game ended but before host started a new round.
-          // Stay on lobby-style view so the host can trigger New Round.
-          if (phaseRef.current !== "results") setPhase("results");
+        } else {
+          // Rejoined after the game ended: show the same results everyone else sees.
+          setFinalLeaderboard(m.leaderboard ?? null);
+          setQuestionAnswers(m.answers ?? {});
+          setPhase("results");
         }
-        break;
-      }
-      case "player_list": {
-        // Legacy message — still handled for backward compat.
-        const m = msg as WSPlayerList;
-        setPlayers(m.players);
-        setScores((s) => {
-          const next = { ...s };
-          for (const p of m.players) if (next[p] === undefined) next[p] = 0;
-          return next;
-        });
-        if (m.votes) setVotes(m.votes);
         break;
       }
       case "player_joined": {
@@ -523,6 +475,17 @@ export default function RoomPage() {
       case "player_left": {
         const m = msg as WSPlayerLeft;
         setPlayers((p) => p.filter((u) => u !== m.username));
+        setVotes((v) => {
+          const next = { ...v };
+          delete next[m.username];
+          return next;
+        });
+        break;
+      }
+      case "host_changed": {
+        const m = msg as WSHostChanged;
+        setHostUsername(m.host_username);
+        setIsHost(m.host_username === myUsername);
         break;
       }
       case "player_answered": {
@@ -534,7 +497,30 @@ export default function RoomPage() {
           ...qa,
           [m.question_index]: { ...(qa[m.question_index] ?? {}), [m.username]: m.is_correct },
         }));
-        if (m.username === myUsername.current) setMyResult(m.is_correct);
+        break;
+      }
+      case "answer_result": {
+        const m = msg as WSAnswerResult;
+        if (m.question_index !== currentQRef.current) break;
+        setAnswered(m.selected);
+        setMyResult(m.is_correct);
+        setCorrectIndex(m.correct_index);
+        setReveal(m.reveal ?? null);
+        markMine(m.is_correct);
+        break;
+      }
+      case "question_closed": {
+        // Everyone answered or time ran out: the answer is marked for all.
+        const m = msg as WSQuestionClosed;
+        if (m.question_index !== currentQRef.current) break;
+        setClosed(true);
+        setCorrectIndex(m.correct_index);
+        setReveal(m.reveal ?? null);
+        if (answeredRef.current === null) {
+          breakStreak();
+          play("wrong");
+          pulseDots({ tone: "bad", strength: 0.8 });
+        }
         break;
       }
       case "player_skipped": {
@@ -546,17 +532,18 @@ export default function RoomPage() {
       }
       case "start_game": {
         const m = msg as WSStartGame;
+        cancelTransition();
         setQuestions(m.questions);
-        setTimerSeconds(m.timer_seconds ?? 15);
+        setTimerSeconds(m.timer_seconds);
+        setScores(m.scores);
+        setCorrectCounts(m.correct_counts);
         setCurrentQ(0);
-        setAnswered(null);
-        setMyResult(null);
-        setRespondedUsers(new Set());
-        setTimeLeft(m.timer_seconds ?? 15);
+        resetQuestionState();
+        resetStreak();
+        startCountdown(m.timer_seconds * 1000);
         setFinalLeaderboard(null);
         setQuestionAnswers({});
         statsSaved.current = false;
-        guestCountedRef.current = false;
         setPhase("playing");
         break;
       }
@@ -566,16 +553,29 @@ export default function RoomPage() {
         break;
       }
       case "next_question": {
+        // The server closed this question (time up, or everyone answered).
         const m = msg as WSNextQuestion;
-        if (phaseRef.current === "playing" && m.question_index === currentQRef.current) {
-          setAdvanceTrigger((n) => n + 1);
-        }
+        if (phaseRef.current !== "playing" || m.question_index !== currentQRef.current || inTransitionRef.current) break;
+        inTransitionRef.current = true;
+        setInTransition(true);
+        transitionTimer.current = setTimeout(() => {
+          transitionTimer.current = null;
+          setCurrentQ(m.question_index + 1);
+          resetQuestionState();
+          startCountdown(timerSecondsRef.current * 1000);
+          inTransitionRef.current = false;
+          setInTransition(false);
+        }, TRANSITION_MS);
         break;
       }
       case "game_finished": {
         const m = msg as WSGameFinished;
+        cancelTransition();
         setFinalLeaderboard(m.leaderboard);
         setRoomQDiff(m.question_difficulty);
+        setRoomTags(m.tags);
+        setQuestions(m.questions);
+        setQuestionAnswers(m.answers);
         // Reflect canonical scores/counts.
         const finalScores: PlayerScores = {};
         const finalCounts: PlayerCounts = {};
@@ -586,18 +586,46 @@ export default function RoomPage() {
         setScores(finalScores);
         setCorrectCounts(finalCounts);
         setPhase("results");
+
+        // Record stats once, from the server's numbers so they match the leaderboard.
+        const me = m.leaderboard.find((e) => e.username === myUsername);
+        if (me && !statsSaved.current) {
+          statsSaved.current = true;
+          saveMultiplayerGame({
+            topics: m.tags,
+            correct: me.correct_count,
+            total: m.total_questions,
+            rank: me.rank,
+            totalPlayers: m.leaderboard.length,
+            score: me.score,
+            questionDifficulty: m.question_difficulty,
+          });
+          if (!isLoggedIn()) incrementGuestGamesPlayed();
+        }
         break;
       }
       case "new_game_ready": {
         const m = msg as WSNewGameReady;
+        if (pendingNewRound.current) {
+          pendingNewRound.current.resolve();
+          pendingNewRound.current = null;
+        }
+        // A guest who has used up the free trial can't join the next round.
+        if (guestMustRegister()) {
+          sendWS({ type: "leave_room" });
+          intentionalClose.current = true;
+          clearRejoinToken(roomCode, myUsername);
+          router.replace("/login?reason=trial_used");
+          return;
+        }
         setQuestions(m.questions);
         setRoomTags(m.tags);
         setRoomQDiff(m.question_difficulty);
         setTimerSeconds(m.timer_seconds);
         setCurrentQ(0);
-        setAnswered(null);
-        setMyResult(null);
-        setRespondedUsers(new Set());
+        resetQuestionState();
+        resetStreak();
+        setShareOpen(false);
         setQuestionAnswers({});
         setFinalLeaderboard(null);
         setScores((s) => {
@@ -611,50 +639,59 @@ export default function RoomPage() {
           return next;
         });
         statsSaved.current = false;
-        guestCountedRef.current = false;
         setShowNewRound(false);
         setPhase("lobby");
+        sendWS({ type: "vote_difficulty", seconds: myVoteRef.current });
+        break;
+      }
+      case "error": {
+        const m = msg as WSError;
+        if (m.context === "new_game" && pendingNewRound.current) {
+          pendingNewRound.current.reject(new Error(m.message));
+          pendingNewRound.current = null;
+        } else {
+          console.warn("[room]", m.message);
+        }
         break;
       }
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!myUsername.current) return;
+    if (!myUsername || !hasUser() || guestMustRegister()) return;
 
+    // React dev mode runs effects twice; reset so the second run can reconnect.
+    intentionalClose.current = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     function connect() {
-      const socket = createWebSocket(roomCode, myUsername.current);
+      const socket = createWebSocket(roomCode, myUsername, readRejoinToken(roomCode, myUsername));
       ws.current = socket;
 
       socket.onopen = () => {
+        if (ws.current !== socket) return;
         reconnectCount.current = 0;
+        setReconnectAttempt(0);
         setReconnecting(false);
-        if (phaseRef.current === "connecting" || phaseRef.current === "error") {
-          setPhase("lobby");
-        }
+        // The server answers with room_state, which sets the phase.
       };
 
       socket.onclose = (ev) => {
+        // Ignore sockets we've already replaced.
+        if (ws.current !== socket) return;
         ws.current = null;
         if (intentionalClose.current) return;
 
-        // 4404 = room doesn't exist; 4409 = username collision. Stop retrying.
-        if (ev.code === 4404) {
+        const fatal = FATAL_CLOSE[ev.code];
+        if (fatal) {
           setReconnecting(false);
           setPhase("error");
-          setError("This room no longer exists. Ask the host for a fresh code.");
-          return;
-        }
-        if (ev.code === 4409) {
-          setReconnecting(false);
-          setPhase("error");
-          setError("That name is already taken in this room. Pick a different one.");
+          setError(fatal);
           return;
         }
 
         reconnectCount.current += 1;
+        setReconnectAttempt(reconnectCount.current);
         const delay = Math.min(1000 * Math.pow(2, reconnectCount.current - 1), 8000);
         setReconnecting(true);
         retryTimer = setTimeout(connect, delay);
@@ -663,6 +700,7 @@ export default function RoomPage() {
       socket.onerror = () => { /* let onclose drive */ };
 
       socket.onmessage = (e) => {
+        if (ws.current !== socket) return;
         try { handleMessage(JSON.parse(e.data as string) as WSMessage); } catch { /* ignore */ }
       };
     }
@@ -683,81 +721,122 @@ export default function RoomPage() {
     window.addEventListener("focus", wakeReconnect);
     window.addEventListener("online", wakeReconnect);
 
-    connect();
+    // Open on the next tick: React dev mode mounts, unmounts and remounts
+    // immediately, and a socket opened in between would join and leave at once.
+    retryTimer = setTimeout(connect, 0);
     return () => {
       intentionalClose.current = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (transitionTimer.current) clearTimeout(transitionTimer.current);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", wakeReconnect);
       window.removeEventListener("online", wakeReconnect);
-      ws.current?.close();
+      const sock = ws.current;
+      ws.current = null;
+      sock?.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode]);
 
+  // Display-only countdown; the server decides when a question ends.
+  // Display-only countdown; it stops once the question closes.
   useEffect(() => {
-    if (phase !== "lobby" || !myUsername.current) return;
-    sendWS({ type: "vote_difficulty", username: myUsername.current, seconds: myVoteSeconds });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myVoteSeconds, phase]);
-
-  useEffect(() => {
-    if (phase !== "playing" || inTransition) return;
-    setTimeLeft(timerSeconds);
+    if (phase !== "playing" || inTransition || closed) return;
     const interval = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          setAdvanceTrigger((n) => n + 1);
-          return timerSeconds;
-        }
-        return t - 1;
-      });
-    }, 1000);
+      const left = Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000));
+      setTimeLeft(left);
+      if (left !== lastTick.current && left > 0 && left <= 5 && answeredRef.current === null) play("tick");
+      lastTick.current = left;
+    }, 250);
     return () => clearInterval(interval);
-  }, [phase, currentQ, timerSeconds, inTransition]);
+  }, [phase, inTransition, closed]);
 
-  function startGame() {
-    const timer = calcTimer(votes);
-    sendWS({ type: "start_game", timer_seconds: timer });
+  useKeepAboveFeedback(optionsRef, phase === "playing" && (answered !== null || closed) && !inTransition);
+
+  // Results: a cheer for the winner (everyone else gets a smaller one).
+  useEffect(() => {
+    if (phase !== "results") return;
+    const won = finalLeaderboard?.find((e) => e.username === myUsername)?.rank === 1;
+    const t = window.setTimeout(() => {
+      if (won) { play("fanfare"); pulseDots({ tone: "hl", strength: 1.4 }); }
+      else play("streak");
+    }, 700);
+    return () => window.clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  function vote(seconds: number) {
+    setMyVoteSeconds(seconds);
+    myVoteRef.current = seconds;
+    sendWS({ type: "vote_difficulty", seconds });
   }
 
-  function submitAnswer(i: number) {
-    if (answered !== null) return;
-    setAnswered(i);
-    sendWS({ type: "submit_answer", data: { question_index: currentQ, answer_index: i } });
+  function startGame() {
+    sendWS({ type: "start_game" });
+  }
+
+  function submitAnswer(i: number, el?: HTMLElement) {
+    if (answered !== null || closed) return;
+    pickedEl.current = el ?? null;
+    if (sendWS({ type: "submit_answer", data: { question_index: currentQ, answer_index: i } })) setAnswered(i);
   }
 
   function submitSkip() {
-    if (answered !== null) return;
-    setAnswered(-1);
-    sendWS({ type: "skip_question", data: { question_index: currentQ, answer_index: -1 } });
+    if (answered !== null || closed) return;
+    if (sendWS({ type: "skip_question", data: { question_index: currentQ } })) {
+      setAnswered(-1);
+      breakStreak();
+      play("tap");
+    }
   }
 
-  function copyCode() {
-    navigator.clipboard.writeText(roomCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function copyCode() {
+    try {
+      await copyText(roomCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* the code stays on screen to copy by hand */ }
   }
 
-  async function startNewRound(params: {
+  function leaveRoom(to: string) {
+    sendWS({ type: "leave_room" });
+    intentionalClose.current = true;
+    clearRejoinToken(roomCode, myUsername);
+    router.push(to);
+  }
+
+  /** Host asks the server for a new round; settles when the server answers. */
+  function startNewRound(params: {
     tags: string[];
     count: number;
     questionDifficulty: QuestionDifficulty;
-  }) {
-    // Host generates questions then asks the server to set them up as the
-    // next round. Server resets scores and broadcasts new_game_ready.
-    const genRes = await api.generateQuestions(params.tags, params.count, params.questionDifficulty);
-    sendWS({
-      type: "request_new_game",
-      data: {
-        questions: genRes.questions,
-        tags: params.tags,
-        question_difficulty: params.questionDifficulty,
-        timer_seconds: calcTimer(votes),
-      },
+  }): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const sent = sendWS({
+        type: "request_new_game",
+        data: { tags: params.tags, count: params.count, question_difficulty: params.questionDifficulty },
+      });
+      if (!sent) {
+        reject(new Error("You're not connected to the room right now. Try again in a moment."));
+        return;
+      }
+      const timer = setTimeout(() => {
+        pendingNewRound.current = null;
+        reject(new Error("The server took too long to make the new round. Try again."));
+      }, 90_000);
+      pendingNewRound.current = {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      };
     });
-    sessionStorage.setItem(`qrio_tags_${roomCode}`, JSON.stringify(params.tags));
-    sessionStorage.setItem(`qrio_qdiff_${roomCode}`, params.questionDifficulty);
+  }
+
+  function openNewRound() {
+    if (guestMustRegister()) {
+      leaveRoom("/login?reason=trial_used");
+      return;
+    }
+    setShowNewRound(true);
   }
 
   // Sorted scores for in-game scoreboard. Stable order on ties (alphabetical)
@@ -771,6 +850,15 @@ export default function RoomPage() {
   });
   const q = questions[currentQ];
 
+  const [copiedLink, setCopiedLink] = useState(false);
+  async function copyLink() {
+    try {
+      await copyText(`${window.location.origin}/room/${roomCode}`);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch { /* the code is on screen to share by hand */ }
+  }
+
   const ReconnectingBanner = (
     <AnimatePresence>
       {reconnecting && (
@@ -778,45 +866,60 @@ export default function RoomPage() {
           initial={{ y: -40, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: -40, opacity: 0 }}
-          transition={{ type: "spring", stiffness: 380, damping: 26 }}
-          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-3 bg-ink text-on-ink py-2.5 px-4 font-bold text-sm"
+          transition={{ duration: 0.3, ease: EASE }}
+          className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-2.5 border-b-2 border-ink bg-hl text-hl-ink py-2.5 px-4 font-extrabold text-sm"
+          role="status"
         >
-          <Wifi size={15} className="animate-pulse" />
-          Reconnecting… (attempt {reconnectCount.current})
+          <Wifi size={16} className="animate-pulse" />
+          Reconnecting… (attempt {reconnectAttempt})
         </motion.div>
       )}
     </AnimatePresence>
   );
 
+  /** Slim bar for room screens that aren't mid-question. */
+  const RoomBar = (
+    <nav className="sticky top-0 z-30 h-16 border-b-2 border-ink bg-card">
+      <div className="h-full max-w-5xl mx-auto flex items-center justify-between gap-3 px-4 sm:px-6">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-[28px]"><Logo /></span>
+          <span aria-hidden="true" className="h-6 w-0.5 rounded-full" style={{ background: "var(--line-soft)" }} />
+          <span className="font-mono text-base sm:text-lg font-black tracking-[0.2em] text-ink">{roomCode}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <button
+            onClick={() => leaveRoom(phase === "lobby" ? "/multiplayer" : getHomePath())}
+            className="sketch-btn-light gap-1.5 px-3 h-10 text-sm focus-ring"
+          >
+            <LogOut size={15} /> <span className="hidden sm:inline">Leave</span>
+          </button>
+        </div>
+      </div>
+    </nav>
+  );
+
   // ── CONNECTING ──────────────────────────────────────────────────────────
   if (phase === "connecting") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-svh flex items-center justify-center p-6">
         <motion.div
-          initial={{ opacity: 0, scale: 0.85 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ type: "spring", stiffness: 320, damping: 18 }}
-          className="text-center space-y-4"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: EASE }}
+          className="text-center"
+          role="status"
         >
-          <motion.div
-            animate={{ y: [0, -8, 0] }}
-            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-            className="w-20 h-20 bg-ink rounded-2xl flex items-center justify-center mx-auto"
-            style={{ boxShadow: "4px 4px 0px var(--shadow)" }}
-          >
-            <Wifi size={36} className="text-on-ink" />
-          </motion.div>
-          <p className="text-ink-soft font-black text-lg">Connecting to room…</p>
-          <div className="flex gap-2 justify-center">
-            {[0, 1, 2].map((i) => (
-              <motion.div
-                key={i}
-                animate={{ y: [0, -6, 0] }}
-                transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
-                className="w-2.5 h-2.5 bg-ink rounded-full"
-              />
-            ))}
+          <div className="mx-auto w-16 h-16 rounded-2xl border-2 border-ink bg-hl text-hl-ink shadow-[4px_4px_0_var(--shadow)] flex items-center justify-center">
+            <Loader2 size={28} className="animate-spin" />
           </div>
+          <p className="mt-6 font-heading text-2xl text-ink">Joining room</p>
+          <p className="mt-1 font-mono text-xl font-black tracking-[0.25em] text-ink-soft">{roomCode}</p>
+          {reconnecting && (
+            <p className="mt-3 text-sm font-semibold text-ink-muted">
+              Can&apos;t reach the server yet (attempt {reconnectAttempt}). Retrying…
+            </p>
+          )}
         </motion.div>
       </div>
     );
@@ -825,29 +928,21 @@ export default function RoomPage() {
   // ── ERROR ───────────────────────────────────────────────────────────────
   if (phase === "error") {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="min-h-svh flex items-center justify-center p-4">
         <motion.div
-          initial={{ opacity: 0, scale: 0.85 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ type: "spring", stiffness: 320, damping: 18 }}
-          className="text-center space-y-4 max-w-sm"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: EASE }}
+          className="w-full max-w-sm sketch-card p-6 sm:p-8 text-center"
         >
-          <div
-            className="w-20 h-20 bg-red-50 dark:bg-red-950/40 border-2 border-red-500 rounded-2xl flex items-center justify-center mx-auto"
-            style={{ boxShadow: "4px 4px 0px var(--accent-red)" }}
-          >
-            <AlertTriangle size={36} className="text-red-600 dark:text-red-400" />
+          <div className="mx-auto w-14 h-14 rounded-2xl border-2 border-bad bg-bad-tint flex items-center justify-center">
+            <AlertTriangle size={26} className="text-bad" />
           </div>
-          <h2 className="font-heading text-3xl text-ink">Oops!</h2>
-          <p className="text-ink-soft font-medium">{error || "Room not found or server unreachable."}</p>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ y: -1 }}
-            onClick={() => router.push("/multiplayer")}
-            className="sketch-btn-dark gap-2 px-6 py-3 focus-ring"
-          >
-            Back to Multiplayer <ArrowRight size={15} />
-          </motion.button>
+          <h1 className="mt-5 font-heading text-3xl text-ink">Couldn&apos;t join</h1>
+          <p className="mt-2 text-base font-semibold text-ink-soft">{error || "Room not found or the server is unreachable."}</p>
+          <button onClick={() => router.push("/multiplayer")} className="mt-6 w-full sketch-btn-accent gap-2 h-12 text-base focus-ring">
+            Back to multiplayer <ArrowRight size={17} />
+          </button>
         </motion.div>
       </div>
     );
@@ -859,391 +954,275 @@ export default function RoomPage() {
     const votedCount = Object.keys(votes).length;
     const voteTally: Record<number, number> = {};
     for (const sec of Object.values(votes)) voteTally[sec] = (voteTally[sec] ?? 0) + 1;
+    const voteChoices = MULTI_DIFFICULTIES.map((d) => ({
+      value: DIFFICULTY_CONFIG[d].seconds,
+      label: `${DIFFICULTY_CONFIG[d].seconds}s`,
+      sub: d === "easy" ? "Relaxed" : d === "medium" ? "Steady" : "Frantic",
+      icon: timerIcon(DIFFICULTY_CONFIG[d].seconds),
+    }));
 
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-5">
+      <div className="min-h-svh flex flex-col">
         {ReconnectingBanner}
-        <motion.div
-          variants={stagger(0.08)}
+        {RoomBar}
+        <motion.main
+          variants={stagger(0.07)}
           initial="hidden"
           animate="show"
-          className="w-full max-w-lg space-y-5"
+          className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 pt-8 sm:pt-12 pb-8 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-6 lg:gap-8 items-start"
         >
-
-          <motion.div variants={scaleIn} className="sketch-card p-6 text-center">
-            <p className="flex items-center justify-center gap-2 text-xs font-black text-ink-muted uppercase tracking-widest mb-3">
-              <Hash size={12} /> Room Code
-            </p>
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              whileHover={{ scale: 1.02 }}
-              onClick={copyCode}
-              className="font-mono text-5xl font-black tracking-[0.3em] text-ink hover:text-ink-soft transition-colors inline-flex items-center gap-3 focus-ring rounded-md"
-              title="Click to copy"
-            >
-              {roomCode}
-              <AnimatePresence mode="wait" initial={false}>
-                {copied ? (
-                  <motion.span key="check" initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0 }}>
-                    <Check size={22} className="text-emerald-600" />
-                  </motion.span>
-                ) : (
-                  <motion.span key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
-                    <Copy size={22} className="text-ink-faint" />
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </motion.button>
-            <p className="text-xs text-ink-faint mt-2 font-medium">Click to copy · Share with friends!</p>
-          </motion.div>
-
-          <motion.div variants={fadeUp} className="sketch-card p-5">
-            <p className="flex items-center gap-2 text-xs font-black text-ink-muted uppercase tracking-widest mb-3">
-              <Users size={12} /> Players ({players.length})
-            </p>
-            {players.length === 0 ? (
-              <p className="text-ink-faint text-sm font-medium">Waiting for players to join…</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                <AnimatePresence>
-                  {players.map((p) => (
-                    <motion.div
-                      key={p}
-                      layout
-                      initial={{ opacity: 0, scale: 0.6 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.6 }}
-                      transition={{ type: "spring", stiffness: 380, damping: 22 }}
-                      className="flex items-center gap-2 sketch-card-sm px-3 py-1.5"
+          <div className="space-y-6">
+            {/* The ticket: code to read out, buttons to share it */}
+            <motion.section variants={fadeUp} className="sketch-card overflow-clip">
+              <div className="p-5 sm:p-7">
+                <h1 className="font-heading text-3xl sm:text-4xl text-ink leading-none">Get your friends in</h1>
+                <p className="mt-2 text-sm font-bold text-ink-muted">They join from Multiplayer with this code.</p>
+                <div className="mt-5 flex gap-1.5 sm:gap-2" aria-label={`Room code ${roomCode.split("").join(" ")}`}>
+                  {roomCode.split("").map((ch, i) => (
+                    <span
+                      key={i}
+                      aria-hidden="true"
+                      className="flex-1 max-w-16 h-14 sm:h-16 rounded-xl border-2 border-ink bg-paper flex items-center justify-center font-mono text-3xl sm:text-4xl font-black text-ink"
                     >
-                      <span className="w-2 h-2 bg-emerald-500 rounded-full" />
-                      <span className="text-sm font-bold text-ink">{p}</span>
-                      {p === myUsername.current && <span className="text-xs text-ink-faint font-medium">(you)</span>}
-                      {isHost && p === myUsername.current && <Crown size={11} className="text-amber-500" />}
-                      {votes[p] !== undefined && <TimerDifficultyIcon seconds={votes[p]} />}
-                    </motion.div>
+                      {ch}
+                    </span>
                   ))}
-                </AnimatePresence>
+                </div>
+                <div className="mt-5 grid grid-cols-2 gap-2.5">
+                  <button onClick={copyCode} className="sketch-btn-light gap-2 h-11 text-sm focus-ring">
+                    {copied ? <><Check size={16} className="text-good" /> Copied</> : <><Copy size={16} /> Copy code</>}
+                  </button>
+                  <button onClick={copyLink} className="sketch-btn-light gap-2 h-11 text-sm focus-ring">
+                    {copiedLink ? <><Check size={16} className="text-good" /> Copied</> : <><Link2 size={16} /> Copy link</>}
+                  </button>
+                </div>
               </div>
-            )}
-          </motion.div>
+              {roomTags.length > 0 && (
+                <div className="border-t-2 border-dashed border-ink bg-hl-soft px-5 sm:px-7 py-4 flex flex-wrap items-center gap-1.5">
+                  {roomTags.map((t) => (
+                    <span key={t} className="rounded-full border-2 border-ink bg-hl px-2.5 py-0.5 text-xs font-extrabold text-hl-ink">{t}</span>
+                  ))}
+                  <span className="ml-1 text-sm font-bold text-ink-soft">
+                    · {questions.length > 0 ? `${questions.length} questions · ` : ""}{QUESTION_DIFFICULTY_CONFIG[roomQDiff].label}
+                  </span>
+                </div>
+              )}
+            </motion.section>
 
-          <motion.div variants={fadeUp} className="sketch-card p-5">
-            <p className="flex items-center gap-2 text-xs font-black text-ink-muted uppercase tracking-widest mb-3">
-              <Timer size={12} /> Vote on Timer Difficulty
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              {MULTI_DIFFICULTIES.map((d) => {
-                const cfg = DIFFICULTY_CONFIG[d];
-                const active = myVoteSeconds === cfg.seconds;
-                const tally = voteTally[cfg.seconds] ?? 0;
-                const pct = votedCount > 0 ? (tally / votedCount) * 100 : 0;
-                return (
-                  <motion.button
-                    key={d}
-                    whileTap={{ scale: 0.95 }}
-                    whileHover={{ y: -2 }}
-                    onClick={() => setMyVoteSeconds(cfg.seconds)}
-                    className={`relative overflow-hidden flex flex-col items-center gap-1.5 py-3 rounded-xl border-2 font-bold text-xs transition-colors duration-150 focus-ring ${
-                      active ? `${cfg.activeClass} shadow-[2px_2px_0_var(--shadow)]` : "border-line-soft text-ink-muted bg-card hover:border-ink hover:text-ink"
-                    }`}
-                  >
-                    {tally > 0 && (
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{ width: `${pct}%` }}
-                        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                        className="absolute bottom-0 left-0 h-1 bg-current opacity-50"
-                      />
-                    )}
-                    <TimerDifficultyIcon seconds={cfg.seconds} />
-                    <span>{cfg.label}</span>
-                    <span className="text-[10px] opacity-70">{cfg.seconds}s</span>
-                    {tally > 0 && (
-                      <span className="absolute top-1 right-1.5 text-[9px] font-black opacity-70 tabular-nums">{tally}</span>
-                    )}
-                  </motion.button>
-                );
-              })}
-            </div>
-            {votedCount > 0 && (
-              <p className="text-xs text-ink-faint mt-3 text-center font-medium">
-                {votedCount} voted · Avg timer: <span className="text-ink font-black">{calculatedTimer}s</span>
+            {/* Who's here */}
+            <motion.section variants={fadeUp} className="sketch-card p-5 sm:p-7">
+              <h2 className="font-heading text-xl text-ink">
+                Players <span className="text-ink-muted tabular-nums">{players.length}</span>
+              </h2>
+              {players.length === 0 ? (
+                <p className="mt-3 text-sm font-semibold text-ink-muted">Waiting for players to join…</p>
+              ) : (
+                <ul className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <AnimatePresence initial={false}>
+                    {players.map((p) => (
+                      <motion.li
+                        key={p}
+                        layout
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        transition={{ duration: 0.25, ease: EASE }}
+                        className={`flex items-center gap-2.5 rounded-xl border-2 px-3 py-2 ${p === myUsername ? "border-ink bg-hl-soft" : "border-line-soft bg-card"}`}
+                      >
+                        <Avatar name={p} size={30} />
+                        <span className="flex-1 min-w-0 truncate text-sm font-extrabold text-ink">
+                          {p}{p === myUsername && <span className="font-semibold text-ink-muted"> (you)</span>}
+                        </span>
+                        {p === hostUsername && <Crown size={15} className="text-ink shrink-0" aria-label="Host" />}
+                        {votes[p] !== undefined && (
+                          <span className="flex items-center gap-1 text-xs font-extrabold text-ink-soft tabular-nums shrink-0" aria-label={`voted ${votes[p]} seconds`}>
+                            {timerIcon(votes[p], 13)}{votes[p]}s
+                          </span>
+                        )}
+                      </motion.li>
+                    ))}
+                  </AnimatePresence>
+                </ul>
+              )}
+            </motion.section>
+          </div>
+
+          <div className="space-y-6 lg:sticky lg:top-24">
+            {/* Timer vote */}
+            <motion.section variants={fadeUp} className="sketch-card p-5 sm:p-7">
+              <ChoiceGrid
+                label="How long per question?"
+                hint="Everyone votes. The timer is the average."
+                options={voteChoices}
+                value={myVoteSeconds}
+                onChange={vote}
+                columns="grid-cols-3"
+                badge={(v) => (voteTally[v] ?? 0) > 0 ? (
+                  <span className="absolute top-1.5 right-2 text-xs font-extrabold tabular-nums">{voteTally[v]}</span>
+                ) : null}
+              />
+              <p className="mt-4 text-sm font-bold text-ink-muted">
+                {votedCount > 0
+                  ? <>{votedCount} voted · timer will be <span className="text-ink">{calculatedTimer}s</span></>
+                  : "Nobody has voted yet."}
               </p>
+            </motion.section>
+
+            {isHost ? (
+              <motion.div variants={fadeUp}>
+                <button onClick={startGame} disabled={players.length === 0} className="w-full sketch-btn-accent gap-2 h-16 text-xl focus-ring">
+                  <Play size={22} /> Start the game
+                </button>
+                <p className="mt-3 text-center text-sm font-bold text-ink-muted">You&apos;re the host. Start whenever everyone&apos;s in.</p>
+              </motion.div>
+            ) : (
+              <motion.div variants={fadeUp} className="sketch-card p-5 flex items-center gap-3" role="status">
+                <Loader2 size={20} className="animate-spin text-ink-muted shrink-0" />
+                <p className="text-sm font-extrabold text-ink">
+                  Waiting for {hostUsername || "the host"} to start…
+                </p>
+              </motion.div>
             )}
-          </motion.div>
-
-          {isHost ? (
-            <motion.button
-              variants={fadeUp}
-              whileTap={{ scale: 0.97 }}
-              whileHover={{ y: -1 }}
-              onClick={startGame}
-              disabled={players.length === 0}
-              className="w-full sketch-btn-dark gap-2 py-4 text-lg font-heading focus-ring"
-            >
-              <Play size={20} /> Start Game!
-            </motion.button>
-          ) : (
-            <motion.div variants={fadeUp} className="text-center text-ink-muted text-sm font-bold sketch-card py-4 flex items-center justify-center gap-2">
-              <div className="flex gap-1">
-                {[0, 1, 2].map((i) => (
-                  <motion.div
-                    key={i}
-                    animate={{ y: [0, -4, 0] }}
-                    transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.12 }}
-                    className="w-2 h-2 bg-ink rounded-full"
-                  />
-                ))}
-              </div>
-              Waiting for the host to start…
-            </motion.div>
-          )}
-
-          <motion.button
-            variants={fadeUp}
-            onClick={() => { intentionalClose.current = true; router.push("/multiplayer"); }}
-            className="w-full text-ink-faint hover:text-ink text-sm font-bold py-2 transition-colors focus-ring rounded-md"
-          >
-            Leave Room
-          </motion.button>
-        </motion.div>
+          </div>
+        </motion.main>
       </div>
     );
   }
 
   // ── TRANSITION ──────────────────────────────────────────────────────────
   if (phase === "playing" && inTransition) {
-    const nextNum = currentQ + 2;
-    const capped = Math.min(nextNum, questions.length);
-    return <QuestionTransition nextNum={capped} total={questions.length} />;
+    const nextNum = Math.min(currentQ + 2, questions.length);
+    return (
+      <div className="min-h-svh flex items-center justify-center p-6">
+        {ReconnectingBanner}
+        <QuestionTransition nextNum={nextNum} total={questions.length} />
+      </div>
+    );
   }
 
   // ── PLAYING ─────────────────────────────────────────────────────────────
   if (phase === "playing" && q) {
-    const progress = (currentQ / questions.length) * 100;
-    const isAnswered = answered !== null;
     const isSkipped = answered === -1;
-    const isCorrect = isAnswered && !isSkipped && answered === q.answer;
-    const showWaiting = isAnswered && respondedUsers.size < players.length && players.length > 1;
+    const picked = answered !== null && answered >= 0;
+    // Colours only appear once the server has told us the right option.
+    const known = correctIndex !== null;
+    const isCorrect = myResult === true;
+    const showBar = answered !== null || closed;
+    const respondedHere = players.filter((p) => respondedUsers.has(p)).length;
+    const waitingOn = players.length - respondedHere;
+    const last = currentQ + 1 >= questions.length;
+    const points = Math.round(10 * qDiffMultiplier(roomQDiff));
+    const seed = currentQ * 7 + roomCode.charCodeAt(0);
+
+    const stateFor = (i: number): OptionState => {
+      if (answered === null && !closed) return "idle";
+      if (!known) return picked && i === answered ? "picked" : "dim";
+      if (i === answered) return i === correctIndex ? "correct" : "wrong";
+      if (i === correctIndex) return "missed";
+      return "dim";
+    };
+
+    const title = isSkipped ? "Skipped"
+      : !known ? "Locked in"
+      : !picked ? "Time's up"
+      : isCorrect ? pick(RIGHT_HEADLINES, seed)
+      : pick(WRONG_HEADLINES, seed);
+    const tone = !known || isSkipped ? "neutral" : isCorrect ? "good" : "bad";
+
+    const footer = closed
+      ? <>{last ? "Final results coming up…" : "Next question coming up…"}{lostStreak >= 3 && <> That ends your streak of {lostStreak}.</>}</>
+      : waitingOn > 0
+        ? <>Waiting for {waitingOn} more player{waitingOn === 1 ? "" : "s"}…</>
+        : <>Everyone&apos;s in.</>;
 
     return (
-      <div className="min-h-screen flex flex-col bg-paper">
+      <div className="min-h-svh flex flex-col">
         {ReconnectingBanner}
 
-        <div className="px-5 py-3 border-b-2 border-ink bg-card flex items-center gap-3">
-          <div className="flex-1 bg-card-soft h-3 overflow-hidden border border-ink">
-            <motion.div
-              className="h-full bg-ink"
-              initial={false}
-              animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            />
+        <header className="sticky top-0 z-20 border-b-2 border-ink bg-card">
+          <div className="max-w-5xl mx-auto h-16 px-4 sm:px-6 flex items-center gap-3">
+            <ProgressTicks total={questions.length} current={currentQ} />
+            <span className="text-sm font-extrabold text-ink tabular-nums whitespace-nowrap">
+              {currentQ + 1}<span className="text-ink-muted">/{questions.length}</span>
+            </span>
+            {myStreak >= 2 && (
+              <motion.span
+                key={myStreak}
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="flex items-center gap-1 rounded-full border-2 border-ink bg-hl px-2 py-0.5 text-sm font-extrabold text-hl-ink"
+                aria-label={`${myStreak} in a row`}
+              >
+                <Flame size={14} /> {myStreak}
+              </motion.span>
+            )}
+            <SoundToggle />
+            <TimerRing seconds={closed ? 0 : timeLeft} total={timerSeconds} size={46} />
           </div>
-          <span className="text-sm font-black text-ink tabular-nums whitespace-nowrap">
-            {currentQ + 1} / {questions.length}
-          </span>
-        </div>
+        </header>
 
-        {/* Mobile-only scoreboard strip — desktop gets the sidebar */}
-        <MobileScoreStrip
-          sortedScores={sortedScores}
-          myUsername={myUsername.current}
-          respondedUsers={respondedUsers}
-        />
+        <Scoreboard variant="strip" sortedScores={sortedScores} myUsername={myUsername} respondedUsers={respondedUsers} />
 
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex-1 flex flex-col items-center justify-center p-5 gap-5 max-w-2xl mx-auto w-full">
-            <div className="flex items-center justify-between w-full">
-              {q.category && (
-                <span
-                  className="text-xs font-black bg-card border-2 border-ink text-ink px-4 py-1.5 rounded-full uppercase tracking-wider"
-                  style={{ boxShadow: "2px 2px 0px var(--shadow)" }}
-                >
-                  {q.category}
-                </span>
-              )}
-              <CircularTimer seconds={timeLeft} total={timerSeconds} />
-            </div>
-
-            <motion.div
-              key={currentQ}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="sketch-card p-6 w-full"
-            >
-              <h2 className="font-body font-extrabold text-xl md:text-2xl text-ink leading-snug text-center">
-                {q.question}
-              </h2>
-            </motion.div>
-
-            <motion.div
-              key={`opts-${currentQ}`}
-              variants={stagger(0.05)}
-              initial="hidden"
-              animate="show"
-              className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full"
-            >
+        <div
+          className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 pt-8 sm:pt-12 pb-10 flex gap-8"
+          style={showBar ? { paddingBottom: "calc(var(--feedback-h, 14rem) + 1.5rem)" } : undefined}
+        >
+          <main className="flex-1 min-w-0 max-w-2xl mx-auto">
+            <QuestionSheet number={currentQ + 1} category={q.category} stamp={stamp}>{q.question}</QuestionSheet>
+            <div ref={optionsRef} key={`opts-${currentQ}`} className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
               {q.options.map((opt, i) => {
-                const sel = answered === i;
-                const correct = i === q.answer;
-                let cls = "bg-card border-ink text-ink hover:shadow-[3px_3px_0_var(--shadow)] hover:-translate-y-0.5";
-                if (isAnswered && !isSkipped) {
-                  if (sel && correct) cls = "bg-emerald-600 border-emerald-700 text-white shadow-[3px_3px_0px_#166534]";
-                  else if (sel && !correct) cls = "bg-red-600 border-red-700 text-white shadow-[3px_3px_0px_#991b1b]";
-                  else if (correct) cls = "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-800 dark:text-emerald-300";
-                  else cls = "bg-card border-line-soft text-ink-faint opacity-50";
-                } else if (isSkipped) {
-                  cls = "bg-card border-line-soft text-ink-faint opacity-40";
-                }
+                const state = stateFor(i);
                 return (
-                  <motion.button
+                  <OptionButton
                     key={i}
-                    variants={scaleIn}
-                    whileTap={!isAnswered ? { scale: 0.97 } : {}}
-                    onClick={() => submitAnswer(i)}
-                    disabled={isAnswered}
-                    className={`flex items-center gap-3 p-4 rounded-xl border-2 font-bold text-sm text-left transition-all duration-150 disabled:cursor-not-allowed focus-ring ${cls} ${sel && !isCorrect && !isSkipped ? "animate-shake" : ""} ${sel && isCorrect ? "animate-pop" : ""}`}
-                  >
-                    <span className={`w-9 h-9 rounded-lg flex items-center justify-center font-black text-sm shrink-0 transition-colors ${
-                      isAnswered && !isSkipped
-                        ? sel && correct ? "bg-white/20 text-white"
-                        : sel ? "bg-white/20 text-white"
-                        : correct ? "bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200"
-                        : "bg-card-soft text-ink-faint"
-                        : isSkipped ? "bg-card-soft text-ink-faint"
-                        : "bg-ink text-on-ink"
-                    }`}>
-                      {isAnswered && !isSkipped && sel && correct
-                        ? <Check size={16} />
-                        : isAnswered && !isSkipped && sel
-                        ? <X size={16} />
-                        : isAnswered && !isSkipped && correct
-                        ? <Check size={16} />
-                        : OPTION_LABELS[i]}
-                    </span>
-                    <span className="flex-1 leading-snug">{opt}</span>
-                  </motion.button>
+                    index={i}
+                    text={opt}
+                    state={state}
+                    onPick={(el) => submitAnswer(i, el)}
+                    note={state === "correct" ? `+${points}` : state === "missed" ? "this one!" : undefined}
+                    remark={state === "wrong" ? reveal?.option_notes?.[i] || undefined : undefined}
+                  />
                 );
               })}
-            </motion.div>
-
-            <AnimatePresence>
-              {!isAnswered && (
-                <motion.button
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={submitSkip}
-                  className="flex items-center gap-2 text-sm font-bold text-ink-faint hover:text-ink transition-colors px-4 py-2 rounded-lg border-2 border-transparent hover:border-line-soft hover:bg-card focus-ring"
-                >
-                  <SkipForward size={15} /> Skip this question
-                </motion.button>
-              )}
-            </AnimatePresence>
-
-            <AnimatePresence>
-              {isAnswered && !isSkipped && (
-                <motion.p
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ type: "spring", stiffness: 380, damping: 22 }}
-                  className={`font-heading text-2xl font-bold ${isCorrect ? "text-emerald-600" : "text-red-600"}`}
-                >
-                  {isCorrect ? "Correct!" : myResult === false ? "Wrong!" : "Locked in!"}
-                </motion.p>
-              )}
-              {isSkipped && (
-                <motion.p
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="font-heading text-xl text-ink-muted"
-                >
-                  Skipped
-                </motion.p>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Desktop sidebar scoreboard */}
-          <div className="hidden md:flex w-52 border-l-2 border-ink bg-card flex-col p-4 gap-3">
-            <p className="flex items-center gap-2 text-xs font-black text-ink-muted uppercase tracking-widest">
-              <Trophy size={12} /> Scores
-            </p>
-            <div className="space-y-2 overflow-y-auto flex-1">
-              <AnimatePresence>
-                {sortedScores.map(([name, score], i) => (
-                  <motion.div
-                    key={name}
-                    layout
-                    initial={{ opacity: 0, x: 8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ type: "spring", stiffness: 380, damping: 26 }}
-                    className="flex items-center gap-2"
-                  >
-                    <span className="text-xs text-ink-faint font-black w-4 text-center">{i + 1}</span>
-                    <span className={`flex-1 text-sm truncate font-bold ${name === myUsername.current ? "text-ink" : "text-ink-soft"}`}>
-                      {name}
-                      {name === myUsername.current && <span className="text-xs text-ink-faint font-medium"> (you)</span>}
-                    </span>
-                    <motion.span
-                      key={score}
-                      initial={{ scale: 1.3, color: "var(--accent-emerald)" }}
-                      animate={{ scale: 1, color: "var(--ink)" }}
-                      transition={{ duration: 0.4 }}
-                      className="text-sm font-black tabular-nums"
-                    >
-                      {score}
-                    </motion.span>
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${respondedUsers.has(name) ? "bg-emerald-500" : "bg-line-soft"}`} />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
             </div>
-            <p className="text-xs text-ink-faint font-medium text-center border-t border-line-faint pt-2">
-              {respondedUsers.size}/{players.length} answered
-            </p>
-          </div>
+            {!showBar && (
+              <div className="mt-6 flex justify-center">
+                <button
+                  onClick={submitSkip}
+                  className="flex items-center gap-1.5 rounded-lg px-4 h-11 text-sm font-extrabold text-ink-muted hover:text-ink transition-colors focus-ring"
+                >
+                  <SkipForward size={16} /> Skip this one
+                </button>
+              </div>
+            )}
+          </main>
+          <Scoreboard variant="column" sortedScores={sortedScores} myUsername={myUsername} respondedUsers={respondedUsers} />
         </div>
 
         <AnimatePresence>
-          {showWaiting && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/40 flex items-center justify-center z-40"
-            >
-              <motion.div
-                initial={{ scale: 0.85, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.85, opacity: 0 }}
-                transition={{ type: "spring", stiffness: 380, damping: 22 }}
-                className="sketch-card p-6 max-w-sm w-full mx-4"
-              >
-                <h3 className="font-heading text-xl text-ink mb-1">
-                  {isSkipped ? "Skipped!" : isCorrect ? "Correct!" : "Answered!"}
-                </h3>
-                <p className="text-ink-muted text-sm font-medium mb-4">Waiting for others…</p>
-                <div className="space-y-2">
+          {showBar && (
+            <FeedbackBar
+              key={`fb-${currentQ}-${known}`}
+              tone={tone}
+              title={title}
+              aside={known && isCorrect ? <>+{points} points{myStreak >= 2 && <> · {myStreak} in a row</>}</> : undefined}
+              explanation={known && !isCorrect && correctIndex !== null
+                ? reveal?.explanation || `The answer was ${q.options[correctIndex]}.`
+                : undefined}
+              quip={known && !isSkipped ? (isCorrect ? reveal?.quip_right : reveal?.quip_wrong) || undefined : undefined}
+              fact={known ? reveal?.fact || undefined : undefined}
+              footer={footer}
+              drainMs={closed ? REVEAL_MS : undefined}
+              action={
+                <div className="flex -space-x-1.5 shrink-0" aria-label={`${respondedHere} of ${players.length} answered`}>
                   {players.map((p) => (
-                    <div key={p} className="flex items-center gap-2.5">
-                      {respondedUsers.has(p)
-                        ? <Check size={16} className="text-emerald-600 shrink-0" />
-                        : <Loader2 size={16} className="animate-spin text-ink-ghost shrink-0" />}
-                      <span className={`text-sm font-bold ${respondedUsers.has(p) ? "text-ink-muted" : "text-ink"}`}>
-                        {p}
-                        {p === myUsername.current && <span className="text-xs text-ink-faint font-medium ml-1">(you)</span>}
-                      </span>
-                    </div>
+                    <span key={p} className={`rounded-full transition-opacity ${respondedUsers.has(p) ? "" : "opacity-30"}`} title={p}>
+                      <Avatar name={p} size={30} />
+                    </span>
                   ))}
                 </div>
-              </motion.div>
-            </motion.div>
+              }
+            />
           )}
         </AnimatePresence>
       </div>
@@ -1259,161 +1238,198 @@ export default function RoomPage() {
       correct_count: correctCounts[name] ?? 0,
       rank: i + 1,
     }));
+  const me = resultsRows.find((r) => r.username === myUsername);
+  const podium = resultsRows.length >= 2 ? [resultsRows[1], resultsRows[0], resultsRows[2]].filter(Boolean) : [];
+  const headline = !me ? "Game over" : me.rank === 1 ? "You won!" : `You came ${ORDINAL(me.rank)}`;
+  const won = me?.rank === 1 && resultsRows.length > 1;
+  const myPct = me && questions.length ? Math.round((me.correct_count / questions.length) * 100) : 0;
+
+  const myMarks = questions.map((_, i): "good" | "bad" | "skip" => {
+    const mine = questionAnswers[i]?.[myUsername];
+    return mine === true ? "good" : mine === false ? "bad" : "skip";
+  });
+  const comment = teacherComment(myPct, (me?.score ?? 0) + currentQ);
+  const standing = me ? `${ORDINAL(me.rank)} of ${resultsRows.length}` : "";
+  const shareCaption = me ? [
+    `Qrio room · ${roomTags.join(", ")}`,
+    `${resultGrid(myMarks)} ${me.correct_count}/${questions.length} · ${me.score} pts`,
+    won ? `Won against ${resultsRows.length - 1} other${resultsRows.length === 2 ? "" : "s"}` : standing,
+    typeof window !== "undefined" ? window.location.origin : "",
+  ].join("\n") : "";
 
   return (
-    <div className="min-h-screen flex flex-col items-center p-5 pt-8">
-      <motion.div
+    <div className="min-h-svh flex flex-col">
+      {ReconnectingBanner}
+      {RoomBar}
+      {won && <Confetti />}
+      <motion.main
         variants={stagger(0.08)}
         initial="hidden"
         animate="show"
-        className="w-full max-w-2xl space-y-5"
+        className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6"
       >
-
-        <motion.div variants={scaleIn} className="text-center">
-          <motion.div
-            initial={{ scale: 0, rotate: -180 }}
-            animate={{ scale: 1, rotate: 0 }}
-            transition={{ type: "spring", stiffness: 200, damping: 14, delay: 0.1 }}
-            className="w-20 h-20 bg-amber-100 dark:bg-amber-950/40 border-2 border-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-3"
-            style={{ boxShadow: "4px 4px 0px var(--accent-amber)" }}
-          >
-            <Trophy size={40} className="text-amber-600 dark:text-amber-400" />
-          </motion.div>
-          <h1 className="font-heading text-5xl text-ink">Game Over!</h1>
-          <p className="text-ink-muted mt-1 text-sm font-medium">
-            {resultsRows.length} players · Room {roomCode}
+        <motion.header variants={fadeUp} className="text-center">
+          <p className="font-hand text-3xl text-ink-muted">game over</p>
+          <h1 className="font-heading text-5xl sm:text-6xl text-ink leading-none mt-1">{headline}</h1>
+          <p className="mt-3 text-sm font-bold text-ink-muted">
+            {resultsRows.length} player{resultsRows.length === 1 ? "" : "s"}
+            {roomTags.length > 0 && <> · {roomTags.join(", ")} · {QUESTION_DIFFICULTY_CONFIG[roomQDiff].label}</>}
           </p>
-        </motion.div>
+          {me && (
+            <motion.p
+              initial={{ clipPath: "inset(0 100% 0 0)" }}
+              animate={{ clipPath: "inset(0 0% 0 0)" }}
+              transition={{ duration: 0.9, delay: 0.9, ease: EASE }}
+              className="mt-4 font-hand text-2xl sm:text-[28px] leading-tight text-bad -rotate-1 text-balance"
+            >
+              {comment}
+            </motion.p>
+          )}
+        </motion.header>
 
-        <motion.div variants={fadeUp} className="sketch-card overflow-hidden">
-          <div className="px-6 py-4 border-b-2 border-ink flex items-center gap-2">
-            <Trophy size={15} />
-            <h3 className="font-black text-ink">Leaderboard</h3>
-          </div>
-          {resultsRows.map((entry, i) => {
-            const pct = questions.length > 0
-              ? Math.round((entry.correct_count / questions.length) * 100)
-              : 0;
-            const isMe = entry.username === myUsername.current;
-            return (
-              <motion.div
-                key={entry.username}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.3 + i * 0.08 }}
-                className={`flex items-center gap-3 px-5 py-4 ${i < resultsRows.length - 1 ? "border-b border-line-faint" : ""} ${isMe ? "bg-card-soft" : ""}`}
-              >
-                <span className={`w-8 text-center font-black text-lg shrink-0 ${
-                  entry.rank === 1 ? "text-amber-500"
-                  : entry.rank === 2 ? "text-ink-muted"
-                  : entry.rank === 3 ? "text-amber-700"
-                  : "text-ink-ghost"
-                }`}>
-                  {entry.rank === 1 ? <Crown size={20} className="mx-auto" /> : `#${entry.rank}`}
-                </span>
-                <span className={`flex-1 font-bold truncate ${isMe ? "text-ink" : "text-ink-soft"}`}>
-                  {entry.username}
-                  {isMe && <span className="text-xs text-ink-faint font-medium ml-1">(you)</span>}
-                </span>
-                <div className="text-right shrink-0">
-                  <div className="font-heading text-xl text-ink tabular-nums">{entry.score} pts</div>
-                  <div className="text-xs text-ink-faint font-medium">
-                    {entry.correct_count}/{questions.length} correct · {pct}%
-                  </div>
+        {/* Podium: 2nd, 1st, 3rd */}
+        {podium.length > 0 && (
+          <motion.section
+            variants={fadeUp}
+            className="grid gap-2 sm:gap-4 items-end pt-4 mx-auto w-full border-b-2 border-ink"
+            style={{ gridTemplateColumns: `repeat(${podium.length}, minmax(0, 1fr))`, maxWidth: podium.length === 2 ? "22rem" : undefined }}
+            aria-label="Podium"
+          >
+            {podium.map((e) => {
+              const first = e.rank === 1;
+              const h = e.rank === 1 ? "h-32 sm:h-36" : e.rank === 2 ? "h-24 sm:h-28" : "h-16 sm:h-20";
+              return (
+                <div key={e.username} className="flex flex-col items-center min-w-0">
+                  {first && <Crown size={22} className="text-ink mb-1" aria-label="Winner" />}
+                  <Avatar name={e.username} size={first ? 52 : 42} />
+                  <p className={`mt-2 w-full truncate text-center text-sm sm:text-base font-extrabold ${e.username === myUsername ? "text-ink" : "text-ink-soft"}`}>
+                    {e.username === myUsername ? "You" : e.username}
+                  </p>
+                  <p className="text-sm font-bold text-ink-muted tabular-nums">{e.score} pts</p>
+                  <motion.div
+                    initial={{ scaleY: 0 }}
+                    animate={{ scaleY: 1 }}
+                    transition={{ duration: 0.6, delay: 0.3 + (3 - e.rank) * 0.12, ease: EASE }}
+                    className={`mt-2 w-full origin-bottom rounded-t-xl border-2 border-b-0 border-ink flex items-start justify-center pt-2 ${h} ${first ? "bg-hl text-hl-ink" : "bg-card text-ink"}`}
+                  >
+                    <span className="font-heading text-3xl sm:text-4xl">{e.rank}</span>
+                  </motion.div>
                 </div>
-              </motion.div>
-            );
-          })}
-        </motion.div>
+              );
+            })}
+          </motion.section>
+        )}
+
+        <motion.section variants={fadeUp} className="sketch-card overflow-clip -mt-px">
+          <h2 className="px-5 sm:px-6 py-4 border-b-2 border-ink font-heading text-xl text-ink">Leaderboard</h2>
+          <ol>
+            {resultsRows.map((entry, i) => {
+              const pct = questions.length > 0 ? Math.round((entry.correct_count / questions.length) * 100) : 0;
+              const isMe = entry.username === myUsername;
+              return (
+                <li
+                  key={entry.username}
+                  className={`flex items-center gap-3 px-5 sm:px-6 py-3.5 ${i < resultsRows.length - 1 ? "border-b-2 border-line-faint" : ""} ${isMe ? "bg-hl-soft" : ""}`}
+                >
+                  <span className="w-7 text-center font-heading text-xl text-ink shrink-0 tabular-nums">{entry.rank}</span>
+                  <Avatar name={entry.username} size={32} />
+                  <span className="flex-1 min-w-0 truncate font-extrabold text-ink">
+                    {entry.username}{isMe && <span className="font-semibold text-ink-muted"> (you)</span>}
+                  </span>
+                  <div className="text-right shrink-0">
+                    <p className="font-heading text-xl text-ink tabular-nums leading-none">{entry.score}</p>
+                    <p className="mt-1 text-xs font-bold text-ink-muted tabular-nums">{entry.correct_count}/{questions.length} · {pct}%</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </motion.section>
 
         {questions.length > 0 && (
-          <motion.div variants={fadeUp} className="sketch-card overflow-hidden">
-            <div className="px-6 py-4 border-b-2 border-ink">
-              <h3 className="font-black text-ink">Question Breakdown</h3>
-            </div>
-            <div className="divide-y divide-line-faint">
+          <motion.section variants={fadeUp} className="sketch-card overflow-clip">
+            <h2 className="px-5 sm:px-6 py-4 border-b-2 border-ink font-heading text-xl text-ink">Question by question</h2>
+            <ol className="divide-y-2 divide-line-faint">
               {questions.map((question, i) => {
                 const qa = questionAnswers[i] ?? {};
                 const correctNames = Object.entries(qa).filter(([, c]) => c).map(([u]) => u);
                 const wrongNames = Object.entries(qa).filter(([, c]) => !c).map(([u]) => u);
+                const mine = qa[myUsername];
                 return (
-                  <details key={i} className="group">
-                    <summary className="flex items-center gap-3 px-5 py-4 hover:bg-card-soft transition-colors cursor-pointer">
-                      <span className="text-ink-muted text-sm font-black w-6 shrink-0">Q{i + 1}</span>
-                      <span className="flex-1 text-sm text-ink font-medium line-clamp-1">{question.question}</span>
-                      <span className="text-xs text-ink-muted font-bold shrink-0 flex items-center gap-1">
-                        <Check size={12} className="text-emerald-600" />{correctNames.length}
-                        <X size={12} className="text-red-500 ml-1" />{wrongNames.length}
-                      </span>
-                      <ChevronDown size={14} className="text-ink-faint ml-1 shrink-0 transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="px-5 pb-4 pt-1 bg-card-soft text-sm space-y-2 border-t border-line-faint">
-                      <p className="text-ink-muted text-xs font-medium">
-                        Correct: <span className="text-emerald-600 font-black">{question.options[question.answer]}</span>
-                      </p>
-                      {correctNames.length > 0 && (
-                        <p className="text-emerald-600 font-semibold flex items-center gap-1.5">
-                          <Check size={13} /> Got it: {correctNames.join(", ")}
-                        </p>
-                      )}
-                      {wrongNames.length > 0 && (
-                        <p className="text-red-600 font-semibold flex items-center gap-1.5">
-                          <X size={13} /> Missed: {wrongNames.join(", ")}
-                        </p>
-                      )}
-                      {correctNames.length === 0 && wrongNames.length === 0 && (
-                        <p className="text-ink-faint">No answers recorded</p>
-                      )}
-                    </div>
-                  </details>
+                  <li key={i}>
+                    <details className="group">
+                      <summary className="flex items-center gap-3 px-5 sm:px-6 py-4 hover:bg-card-soft transition-colors">
+                        <span className={`w-8 h-8 shrink-0 rounded-full border-2 flex items-center justify-center ${mine === true ? "border-good text-good" : mine === false ? "border-bad text-bad" : "border-line-soft text-ink-faint"}`}>
+                          {mine === true ? <Check size={16} strokeWidth={3} /> : <X size={16} strokeWidth={3} />}
+                        </span>
+                        <span className="flex-1 min-w-0 text-sm sm:text-base font-bold text-ink line-clamp-2">{question.question}</span>
+                        <span className="shrink-0 text-xs font-extrabold text-ink-muted tabular-nums">{correctNames.length}/{correctNames.length + wrongNames.length}</span>
+                        <ChevronDown size={16} className="chevron text-ink-muted shrink-0" />
+                      </summary>
+                      <div className="px-5 sm:px-6 pb-4 pl-16 sm:pl-[4.25rem] space-y-1.5 text-sm font-semibold text-ink-soft">
+                        {question.answer !== undefined && (
+                          <p>Answer: <span className="font-extrabold text-good">{question.options[question.answer]}</span></p>
+                        )}
+                        {correctNames.length > 0 && <p>Got it: <span className="text-ink">{correctNames.join(", ")}</span></p>}
+                        {wrongNames.length > 0 && <p>Missed: <span className="text-ink">{wrongNames.join(", ")}</span></p>}
+                        {correctNames.length === 0 && wrongNames.length === 0 && <p className="text-ink-muted">Nobody answered this one.</p>}
+                        {question.fact && (
+                          <p className="flex gap-1.5 pt-1 text-ink-muted">
+                            <Lightbulb size={14} className="shrink-0 mt-0.5" aria-hidden="true" /> {question.fact}
+                          </p>
+                        )}
+                      </div>
+                    </details>
+                  </li>
                 );
               })}
-            </div>
-          </motion.div>
+            </ol>
+          </motion.section>
         )}
 
-        <motion.div variants={fadeUp} className="flex flex-col sm:flex-row gap-3">
+        <motion.div variants={fadeUp} className="flex flex-col sm:flex-row gap-3 pb-4">
           {isHost ? (
-            <motion.button
-              whileTap={{ scale: 0.97 }}
-              whileHover={{ y: -1 }}
-              onClick={() => setShowNewRound(true)}
-              className="flex-1 sketch-btn-dark gap-2 py-3.5 focus-ring"
-            >
-              <RotateCcw size={15} /> New Round Here
-            </motion.button>
+            <button onClick={openNewRound} className="flex-1 sketch-btn-accent gap-2 h-14 text-base focus-ring">
+              <RotateCcw size={18} /> New round here
+            </button>
           ) : (
-            <div className="flex-1 sketch-card py-3.5 text-center text-ink-muted font-bold text-sm">
-              Waiting for host to start a new round…
+            <div className="flex-1 sketch-card h-14 px-4 flex items-center justify-center gap-2.5 text-sm font-extrabold text-ink-soft" role="status">
+              <Loader2 size={16} className="animate-spin shrink-0" /> Waiting for {hostUsername || "the host"} to start another round
             </div>
           )}
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ y: -1 }}
-            onClick={() => {
-              intentionalClose.current = true;
-              sessionStorage.removeItem(`qrio_questions_${roomCode}`);
-              sessionStorage.removeItem(`qrio_host_${roomCode}`);
-              sessionStorage.removeItem(`qrio_tags_${roomCode}`);
-              sessionStorage.removeItem(`qrio_qdiff_${roomCode}`);
-              router.push(getHomePath());
-            }}
-            className="flex-1 sketch-btn-light gap-2 py-3.5 focus-ring"
-          >
-            <Home size={15} /> Leave
-          </motion.button>
+          {me && (
+            <button onClick={() => setShareOpen(true)} className="flex-1 sketch-btn-light gap-2 h-14 text-base focus-ring">
+              <Share2 size={18} /> Share result
+            </button>
+          )}
+          <button onClick={() => leaveRoom(getHomePath())} className="flex-1 sketch-btn-light gap-2 h-14 text-base focus-ring">
+            <Home size={18} /> Leave room
+          </button>
         </motion.div>
+      </motion.main>
 
-      </motion.div>
-
-      <AnimatePresence>
-        {showNewRound && (
-          <NewRoundDialog
-            onClose={() => setShowNewRound(false)}
-            onStart={startNewRound}
-          />
-        )}
-      </AnimatePresence>
+      <NewRoundDialog open={showNewRound} onClose={() => setShowNewRound(false)} onStart={startNewRound} />
+      {me && (
+        <ShareDialog
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          text={shareCaption}
+          card={{
+            mode: "Multiplayer",
+            topics: roomTags,
+            difficulty: QUESTION_DIFFICULTY_CONFIG[roomQDiff].label,
+            correct: me.correct_count,
+            total: questions.length,
+            score: me.score,
+            verdict: headline,
+            title: standing,
+            titleLabel: "Final standing",
+            grid: myMarks,
+            comment,
+            stamps: won ? ["Room champion"] : [],
+          }}
+        />
+      )}
     </div>
   );
 }

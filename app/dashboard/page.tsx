@@ -1,57 +1,40 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/navigation";
 import { motion } from "framer-motion";
 import { getUser, isLoggedIn } from "@/lib/auth";
 import { getStats, accuracy, topTopics, type Stats, type GameRecord } from "@/lib/stats";
-import {
-  Target, Users, ArrowRight, Bot, Crown,
-  Check, X, BarChart2, Flame, BookOpen, Clock, Zap, Award,
-} from "lucide-react";
+import { ArrowRight, CalendarDays, Flame, Target, Users } from "lucide-react";
+import { topicOfTheDay } from "@/lib/fun";
 import PageShell from "../components/PageShell";
-import { fadeUp, scaleIn, stagger } from "@/lib/motion";
-
-function StatCard({ label, value, sub, icon }: { label: string; value: string | number; sub?: string; icon?: React.ReactNode }) {
-  return (
-    <motion.div
-      variants={fadeUp}
-      whileHover={{ y: -3, transition: { duration: 0.15 } }}
-      className="sketch-card-sm p-4 text-center"
-    >
-      {icon && <div className="flex justify-center mb-1.5 text-ink-muted">{icon}</div>}
-      <div className="font-heading text-3xl text-ink leading-none">{value}</div>
-      <div className="text-xs font-black text-ink-soft uppercase tracking-wider mt-1.5">{label}</div>
-      {sub && <div className="text-xs text-ink-faint font-medium mt-0.5 leading-tight">{sub}</div>}
-    </motion.div>
-  );
-}
+import { MarkerLoop } from "../components/Marks";
+import { TimerRing } from "../components/GameUI";
+import { EASE, fadeUp, stagger } from "@/lib/motion";
 
 function GameRow({ game }: { game: GameRecord }) {
   const date = new Date(game.date).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const pct = game.totalQuestions > 0 ? Math.round((game.correctAnswers / game.totalQuestions) * 100) : 0;
   return (
-    <motion.div
-      variants={fadeUp}
-      className="flex items-center gap-3 px-4 py-3 hover:bg-card-soft transition-colors border-b border-line-faint last:border-0"
-    >
-      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${game.type === "solo" ? "bg-ink" : "bg-blue-600"}`}>
-        {game.type === "solo"
-          ? <Target size={15} className="text-on-ink" />
-          : <Users size={15} className="text-white" />}
-      </div>
+    <li className="flex items-center gap-3 px-5 py-3.5 border-b-2 border-line-faint last:border-0">
+      <span
+        className={`w-9 h-9 shrink-0 rounded-full border-2 border-ink flex items-center justify-center ${game.type === "solo" ? "bg-card text-ink" : "bg-hl text-hl-ink"}`}
+        aria-label={game.type === "solo" ? "Solo game" : "Multiplayer game"}
+      >
+        {game.type === "solo" ? <Target size={16} /> : <Users size={16} />}
+      </span>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-bold text-ink truncate">{game.topics.join(", ")}</p>
-        <p className="text-xs text-ink-faint font-medium">
-          {game.correctAnswers}/{game.totalQuestions} correct · {pct}%
-          {game.rank != null && ` · #${game.rank}/${game.totalPlayers}`}
+        <p className="text-sm font-extrabold text-ink truncate">{game.topics.join(", ")}</p>
+        <p className="text-xs font-bold text-ink-muted">
+          {game.correctAnswers}/{game.totalQuestions} right · {pct}%
+          {game.rank != null && ` · ${game.rank === 1 ? "won" : `#${game.rank} of ${game.totalPlayers}`}`}
         </p>
       </div>
       <div className="text-right shrink-0">
-        <div className="text-sm font-black text-ink tabular-nums">{game.score}<span className="text-ink-faint text-[10px] ml-0.5">pts</span></div>
-        <div className="text-xs text-ink-faint">{date}</div>
+        <p className="font-heading text-lg text-ink tabular-nums leading-none">{game.score}</p>
+        <p className="mt-1 text-xs font-bold text-ink-muted">{date}</p>
       </div>
-    </motion.div>
+    </li>
   );
 }
 
@@ -59,11 +42,15 @@ export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<ReturnType<typeof getUser>>(null);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [code, setCode] = useState("");
+  // Depends on the local date, so it's worked out in the browser.
+  const [today, setToday] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace("/"); return; }
     setUser(getUser());
     setStats(getStats());
+    setToday(topicOfTheDay());
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const acc = stats ? accuracy(stats) : 0;
@@ -71,195 +58,175 @@ export default function DashboardPage() {
   const recentGames = stats?.recentGames.slice(0, 5) ?? [];
   const totalGames = stats ? stats.soloGames + stats.multiplayerGames : 0;
   const hasStats = totalGames > 0;
-  const winRate = stats && stats.multiplayerGames > 0
-    ? Math.round((stats.multiplayerWins / stats.multiplayerGames) * 100)
-    : 0;
+
+  function join(e: React.FormEvent) {
+    e.preventDefault();
+    const c = code.trim().toUpperCase();
+    if (c.length === 6) router.push(`/room/${c}`);
+  }
 
   return (
     <PageShell>
-      <div className="flex-1 flex flex-col items-center px-4 sm:px-6 py-8 sm:py-10 gap-10">
+      <motion.div
+        variants={stagger(0.08)}
+        initial="hidden"
+        animate="show"
+        className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-8 sm:pt-12 pb-14"
+      >
+        <motion.p variants={fadeUp} className="font-hand text-2xl sm:text-3xl text-ink-muted">
+          hey {user?.username ?? "there"},
+        </motion.p>
+        <motion.h1 variants={fadeUp} className="font-heading text-ink text-[clamp(2.5rem,8vw,4.5rem)] leading-[0.95]">
+          What are we playing?
+        </motion.h1>
 
-        {/* Mode picker */}
-        <div className="w-full max-w-3xl">
-          <motion.div
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Lone Wolf */}
+          <motion.button
             variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="text-center mb-8"
+            onClick={() => router.push("/solo")}
+            className="group text-left sketch-card pressable p-6 sm:p-7 focus-ring flex flex-col"
           >
-            <h2 className="font-heading text-4xl sm:text-5xl md:text-6xl text-ink mb-2 leading-tight">
-              How do you want to play?
-            </h2>
-            <p className="text-ink-muted text-base font-semibold">
-              Choose your adventure{user?.username ? `, ${user.username}` : ""}
-            </p>
-          </motion.div>
-
-          <motion.div
-            variants={stagger(0.08)}
-            initial="hidden"
-            animate="show"
-            className="grid sm:grid-cols-2 gap-5 sm:gap-6"
-          >
-            {/* Lone Wolf */}
-            <motion.button
-              variants={scaleIn}
-              whileHover={{ y: -4 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => router.push("/solo")}
-              className="group sketch-card p-6 sm:p-8 text-left transition-shadow duration-150 hover:shadow-[6px_6px_0_var(--shadow)] focus-ring"
-            >
-              <motion.div
-                animate={{ rotate: [0, 0, -3, 3, 0] }}
-                transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
-                className="w-14 h-14 sm:w-16 sm:h-16 bg-ink rounded-xl flex items-center justify-center mb-5"
-              >
-                <Target size={28} className="text-on-ink" />
-              </motion.div>
-              <h3 className="font-heading text-3xl text-ink mb-2">Lone Wolf</h3>
-              <p className="text-ink-soft text-sm leading-relaxed">
-                Solo challenge. Pick your topics, set your difficulty, and prove yourself against
-                AI-generated questions. Your rules, your pace.
-              </p>
-              <div className="mt-6 flex items-center gap-2 font-black text-sm text-ink">
-                <span>Play Solo</span>
-                <ArrowRight size={15} className="group-hover:translate-x-1 transition-transform" />
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-heading text-3xl text-ink">Lone Wolf</h2>
+                <p className="mt-1 text-base font-semibold text-ink-soft">Pick a topic, set the clock, chase your best score.</p>
               </div>
-            </motion.button>
+              <TimerRing seconds={8} total={15} size={52} />
+            </div>
+            <span className="mt-auto pt-6 inline-flex items-center gap-2 font-extrabold text-ink">
+              Play solo <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
+            </span>
+          </motion.button>
 
-            {/* Multiplayer */}
-            <motion.button
-              variants={scaleIn}
-              whileHover={{ y: -4 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => router.push("/multiplayer")}
-              className="group sketch-card p-6 sm:p-8 text-left transition-shadow duration-150 hover:shadow-[6px_6px_0_var(--shadow)] focus-ring"
-            >
-              <motion.div
-                animate={{ rotate: [0, 3, -3, 0, 0] }}
-                transition={{ duration: 5, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-                className="w-14 h-14 sm:w-16 sm:h-16 bg-ink rounded-xl flex items-center justify-center mb-5"
-              >
-                <Users size={28} className="text-on-ink" />
-              </motion.div>
-              <h3 className="font-heading text-3xl text-ink mb-2">Multiplayer</h3>
-              <p className="text-ink-soft text-sm leading-relaxed">
-                Challenge your friends in real-time! Create a room, share the code, vote on
-                difficulty together, and see who reigns supreme.
-              </p>
-              <div className="mt-6 flex items-center gap-2 font-black text-sm text-ink">
-                <span>Play Online</span>
-                <ArrowRight size={15} className="group-hover:translate-x-1 transition-transform" />
-              </div>
-            </motion.button>
-          </motion.div>
-
-          <p className="mt-8 text-ink-faint text-xs flex items-center justify-center gap-1.5">
-            <Bot size={12} />
-            Powered by AI · Questions generated fresh every time
-          </p>
+          {/* Multiplayer: host, or join with a code right here */}
+          <motion.section variants={fadeUp} className="sketch-card overflow-clip flex flex-col">
+            <button onClick={() => router.push("/multiplayer")} className="group text-left p-6 sm:p-7 flex-1 focus-ring">
+              <h2 className="font-heading text-3xl text-ink">Multiplayer</h2>
+              <p className="mt-1 text-base font-semibold text-ink-soft">Host a room and race your friends on the same questions.</p>
+              <span className="mt-6 inline-flex items-center gap-2 font-extrabold text-ink">
+                Host a room <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
+              </span>
+            </button>
+            <form onSubmit={join} className="border-t-2 border-dashed border-ink bg-hl-soft px-6 sm:px-7 py-4 flex items-center gap-2">
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+                maxLength={6}
+                placeholder="Room code"
+                aria-label="Room code"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                className="min-w-0 flex-1 sketch-inset h-11 px-3 font-mono text-lg font-black uppercase tracking-[0.25em] text-ink placeholder:font-body placeholder:normal-case placeholder:tracking-normal placeholder:text-sm placeholder:font-bold placeholder-ink-ghost"
+              />
+              <button type="submit" disabled={code.length !== 6} className="sketch-btn-dark gap-1.5 h-11 px-4 text-sm shrink-0 focus-ring">
+                Join <ArrowRight size={16} />
+              </button>
+            </form>
+          </motion.section>
         </div>
 
-        {/* Stats section */}
-        {hasStats && stats && (
-          <motion.div
-            variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="w-full max-w-3xl space-y-5"
+        {/* Topic of the day: one tap into a solo game */}
+        {today && (
+          <motion.button
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45, delay: 0.25, ease: EASE }}
+            onClick={() => router.push(`/solo?topic=${encodeURIComponent(today)}`)}
+            className="group mt-6 w-full text-left sketch-card pressable p-5 sm:p-6 flex items-center gap-4 sm:gap-6 focus-ring"
           >
-            <div className="flex items-center gap-2">
-              <BarChart2 size={18} className="text-ink-soft" />
-              <h3 className="font-heading text-2xl text-ink">Your Stats</h3>
-            </div>
-
-            <motion.div
-              variants={stagger(0.05)}
-              initial="hidden"
-              animate="show"
-              className="grid grid-cols-2 sm:grid-cols-4 gap-3"
-            >
-              <StatCard label="Total Games" value={totalGames} icon={<Zap size={16} />} />
-              <StatCard label="Accuracy" value={`${acc}%`} sub={`${stats.totalCorrect}/${stats.totalQuestionsAnswered}`} icon={<Target size={16} />} />
-              <StatCard label="MP Win Rate" value={stats.multiplayerGames > 0 ? `${winRate}%` : "—"} sub={`${stats.multiplayerWins} wins`} icon={<Crown size={16} />} />
-              <StatCard label="Best Score" value={stats.bestScore || "—"} sub="Single game" icon={<Award size={16} />} />
-            </motion.div>
-
-            <div className="grid md:grid-cols-2 gap-5">
-              {topics.length > 0 && (
-                <motion.div variants={fadeUp} className="sketch-card overflow-hidden">
-                  <div className="px-5 py-3.5 border-b-2 border-ink flex items-center gap-2">
-                    <Flame size={15} className="text-ink-soft" />
-                    <h4 className="font-black text-sm text-ink uppercase tracking-wider">Favorite Topics</h4>
-                  </div>
-                  <div className="p-4 space-y-2.5">
-                    {topics.map(([topic, count], i) => {
-                      const maxCount = topics[0][1];
-                      const pct = Math.round((count / maxCount) * 100);
-                      return (
-                        <div key={topic}>
-                          <div className="flex justify-between text-sm font-bold text-ink mb-1">
-                            <span className="truncate">{topic}</span>
-                            <span className="text-ink-muted font-medium ml-2 shrink-0">{count}×</span>
-                          </div>
-                          <div className="h-2 bg-card-soft border border-line-soft overflow-hidden">
-                            <motion.div
-                              initial={{ width: 0 }}
-                              animate={{ width: `${pct}%` }}
-                              transition={{ duration: 0.8, delay: i * 0.08, ease: [0.16, 1, 0.3, 1] }}
-                              className="h-full bg-ink"
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              )}
-
-              {recentGames.length > 0 && (
-                <motion.div variants={fadeUp} className="sketch-card overflow-hidden">
-                  <div className="px-5 py-3.5 border-b-2 border-ink flex items-center gap-2">
-                    <Clock size={15} className="text-ink-soft" />
-                    <h4 className="font-black text-sm text-ink uppercase tracking-wider">Recent Games</h4>
-                  </div>
-                  <motion.div variants={stagger(0.05)}>
-                    {recentGames.map((game, i) => <GameRow key={i} game={game} />)}
-                  </motion.div>
-                </motion.div>
-              )}
-            </div>
-
-            <motion.div variants={fadeUp} className="sketch-card p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
-              <div className="flex items-center gap-2">
-                <Check size={18} className="text-emerald-600" />
-                <span className="font-heading text-2xl text-emerald-600">{stats.totalCorrect}</span>
-                <span className="text-sm text-ink-muted font-bold">correct</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <X size={18} className="text-red-500" />
-                <span className="font-heading text-2xl text-red-500">{stats.totalQuestionsAnswered - stats.totalCorrect}</span>
-                <span className="text-sm text-ink-muted font-bold">wrong</span>
-              </div>
-              <div className="flex items-center gap-2 ml-auto">
-                <BookOpen size={15} className="text-ink-faint" />
-                <span className="text-sm text-ink-faint font-bold">{stats.totalQuestionsAnswered} questions total</span>
-              </div>
-            </motion.div>
-          </motion.div>
+            <span className="w-12 h-12 shrink-0 rounded-xl border-2 border-ink bg-hl text-hl-ink flex items-center justify-center -rotate-3">
+              <CalendarDays size={22} />
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-xs font-extrabold uppercase tracking-[0.14em] text-ink-muted">Today&apos;s topic</span>
+              <span className="block mt-1 font-heading text-2xl sm:text-3xl text-ink truncate">{today}</span>
+              <span className="block text-sm font-semibold text-ink-soft">A new one every day, the same for everyone.</span>
+            </span>
+            <span className="hidden sm:inline-flex items-center gap-2 font-extrabold text-ink shrink-0">
+              Play it <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
+            </span>
+            <ArrowRight size={20} className="sm:hidden shrink-0 text-ink" aria-hidden="true" />
+          </motion.button>
         )}
 
-        {stats && !hasStats && (
-          <motion.p
-            variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="text-ink-faint text-sm font-medium"
-          >
-            Play a game to start tracking your stats.
-          </motion.p>
+        {/* Report card */}
+        {stats && (
+          <motion.section variants={fadeUp} className="mt-14">
+            <h2 className="font-heading text-3xl sm:text-4xl text-ink">Your report card</h2>
+            {!hasStats ? (
+              <p className="mt-3 text-base font-semibold text-ink-soft">
+                Nothing marked yet. Play a round and your scores land here.
+              </p>
+            ) : (
+              <>
+                <div className="mt-6 sketch-card p-6 sm:p-8 grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-8 sm:gap-12 items-center">
+                  <div className="flex flex-col items-center">
+                    <div className="relative w-44 h-32 flex items-center justify-center">
+                      <MarkerLoop stretch color="var(--bad-mark)" strokeWidth={3.5} duration={0.8} delay={0.4} className="inset-0 w-full h-full" />
+                      <span className="font-heading text-6xl text-ink tabular-nums leading-none">{acc}%</span>
+                    </div>
+                    <p className="mt-2 text-sm font-extrabold text-ink-muted">
+                      {stats.totalCorrect} of {stats.totalQuestionsAnswered} right
+                    </p>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-6">
+                    {[
+                      { k: "Games played", v: totalGames },
+                      { k: "Best score", v: stats.bestScore || "—" },
+                      { k: "Room wins", v: stats.multiplayerGames > 0 ? `${stats.multiplayerWins}/${stats.multiplayerGames}` : "—" },
+                      { k: "Solo games", v: stats.soloGames },
+                    ].map((s) => (
+                      <div key={s.k} className="border-l-2 border-dashed border-line-soft pl-4">
+                        <dd className="font-heading text-3xl sm:text-4xl text-ink tabular-nums leading-none">{s.v}</dd>
+                        <dt className="mt-1.5 text-sm font-bold text-ink-muted">{s.k}</dt>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+
+                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                  {topics.length > 0 && (
+                    <section className="sketch-card p-5 sm:p-6">
+                      <h3 className="font-heading text-xl text-ink flex items-center gap-2">
+                        <Flame size={18} /> Favourite topics
+                      </h3>
+                      <ul className="mt-4 space-y-3.5">
+                        {topics.map(([topic, n], i) => (
+                          <li key={topic}>
+                            <div className="flex justify-between gap-3 text-sm font-extrabold text-ink mb-1.5">
+                              <span className="truncate">{topic}</span>
+                              <span className="text-ink-muted shrink-0 tabular-nums">{n} game{n === 1 ? "" : "s"}</span>
+                            </div>
+                            <div className="h-3.5 rounded-full border-2 border-ink overflow-clip" style={{ background: "var(--inset)" }}>
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: `${Math.round((n / topics[0][1]) * 100)}%` }}
+                                transition={{ duration: 0.8, delay: 0.3 + i * 0.08, ease: EASE }}
+                                className="h-full bg-hl"
+                              />
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                  {recentGames.length > 0 && (
+                    <section className="sketch-card overflow-clip">
+                      <h3 className="px-5 sm:px-6 py-4 border-b-2 border-ink font-heading text-xl text-ink">Recent games</h3>
+                      <ul>
+                        {recentGames.map((g, i) => <GameRow key={i} game={g} />)}
+                      </ul>
+                    </section>
+                  )}
+                </div>
+              </>
+            )}
+          </motion.section>
         )}
-      </div>
+      </motion.div>
     </PageShell>
   );
 }

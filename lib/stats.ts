@@ -1,6 +1,32 @@
+import { getUser } from "./auth";
 import type { Difficulty, QuestionDifficulty } from "./types";
 
-const STATS_KEY = "qrio_stats_v1";
+// Stats live in this browser only, one bucket per account plus one for guests,
+// so two accounts on the same machine never see each other's history.
+const LEGACY_STATS_KEY = "qrio_stats_v1";
+const GUEST_STATS_KEY = "qrio_stats_v1:guest";
+
+function userStatsKey(userId: number): string {
+  return `qrio_stats_v1:u:${userId}`;
+}
+
+function statsKey(): string {
+  const user = getUser();
+  if (!user) return GUEST_STATS_KEY;
+  const key = userStatsKey(user.id);
+  // One-time migration from the old shared bucket: hand it to the first
+  // account that loads stats on this browser.
+  try {
+    if (localStorage.getItem(key) === null) {
+      const legacy = localStorage.getItem(LEGACY_STATS_KEY);
+      if (legacy !== null) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_STATS_KEY);
+      }
+    }
+  } catch { /* storage unavailable */ }
+  return key;
+}
 
 export interface GameRecord {
   type: "solo" | "multiplayer";
@@ -46,7 +72,7 @@ function empty(): Stats {
 export function getStats(): Stats {
   if (typeof window === "undefined") return empty();
   try {
-    const raw = localStorage.getItem(STATS_KEY);
+    const raw = localStorage.getItem(statsKey());
     if (!raw) return empty();
     const parsed = JSON.parse(raw) as Partial<Stats>;
     // Forward-compat: fill any missing keys with defaults so older saves still work.
@@ -59,7 +85,7 @@ export function getStats(): Stats {
 function save(stats: Stats) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+    localStorage.setItem(statsKey(), JSON.stringify(stats));
   } catch {
     // storage full or unavailable — silently ignore
   }
@@ -93,19 +119,18 @@ const TIMER_BONUS: Record<Difficulty, number> = {
   hard:   8,
 };
 
+/** Points for one correct solo answer, before that answer's speed bonus. */
+export function soloPointsPerCorrect(qDiff: QuestionDifficulty, tDiff: Difficulty): number {
+  return 10 * qDiffMultiplier(qDiff) + TIMER_BONUS[tDiff];
+}
+
 export function calcSoloScore(
   correct: number,
   qDiff: QuestionDifficulty = "medium",
   tDiff: Difficulty = "medium",
   speedBonus = 0,
 ): number {
-  const base = correct * 10 * QDIFF_MULTIPLIER[qDiff];
-  const timerKick = correct * TIMER_BONUS[tDiff];
-  return Math.round(base + timerKick + speedBonus);
-}
-
-export function calcMultiplayerScore(correct: number, qDiff: QuestionDifficulty = "medium"): number {
-  return Math.round(correct * 10 * QDIFF_MULTIPLIER[qDiff]);
+  return Math.round(correct * soloPointsPerCorrect(qDiff, tDiff) + speedBonus);
 }
 
 export function saveSoloGame(params: {
@@ -152,10 +177,12 @@ export function saveMultiplayerGame(params: {
   total: number;
   rank: number;
   totalPlayers: number;
+  /** The server's score for this player, so stats match the leaderboard. */
+  score: number;
   questionDifficulty?: QuestionDifficulty;
 }) {
   const stats = getStats();
-  const score = calcMultiplayerScore(params.correct, params.questionDifficulty ?? "medium");
+  const score = params.score;
   stats.multiplayerGames += 1;
   stats.totalQuestionsAnswered += params.total;
   stats.totalCorrect += params.correct;
@@ -177,6 +204,18 @@ export function saveMultiplayerGame(params: {
   stats.recentGames = stats.recentGames.slice(0, 30);
   save(stats);
   return score;
+}
+
+/** Move this browser's guest stats onto a newly registered account. */
+export function adoptGuestStats(userId: number) {
+  if (typeof window === "undefined") return;
+  try {
+    const guest = localStorage.getItem(GUEST_STATS_KEY);
+    if (guest === null) return;
+    const key = userStatsKey(userId);
+    if (localStorage.getItem(key) === null) localStorage.setItem(key, guest);
+    localStorage.removeItem(GUEST_STATS_KEY);
+  } catch { /* storage unavailable */ }
 }
 
 export function topTopics(stats: Stats, n = 5): Array<[string, number]> {

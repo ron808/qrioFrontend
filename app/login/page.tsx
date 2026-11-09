@@ -1,19 +1,21 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { useRouter } from "@/lib/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "@/lib/api";
-import { saveAuth, isLoggedIn, saveGuest } from "@/lib/auth";
-import { fadeUp, scaleIn, stagger, bounceIn } from "@/lib/motion";
-import ThemeToggle from "../components/ThemeToggle";
-import {
-  LogIn, UserPlus, Eye, EyeOff, AlertTriangle, Zap, ArrowRight, ArrowLeft,
-} from "lucide-react";
+import { saveAuth, isLoggedIn, saveGuest, GUEST_GAME_LIMIT } from "@/lib/auth";
+import { adoptGuestStats } from "@/lib/stats";
+import { EASE, fadeUp, stagger } from "@/lib/motion";
+import AuthBar from "../components/AuthBar";
+import Logo from "../components/Logo";
+import Notice from "../components/Notice";
+import { ArrowRight, Eye, EyeOff, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-paper" />}>
+    <Suspense fallback={<div className="min-h-svh bg-paper" />}>
       <LoginPageInner />
     </Suspense>
   );
@@ -49,6 +51,8 @@ function LoginPageInner() {
           ? await api.login(email, password)
           : await api.register(email, username, password);
       saveAuth(res.token, res.user);
+      // A guest who signs up keeps the games they just played.
+      if (tab === "register") adoptGuestStats(res.user.id);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -60,251 +64,164 @@ function LoginPageInner() {
   function handleGuest(e: React.FormEvent) {
     e.preventDefault();
     const name = guestName.trim();
-    if (!name || name.length < 2) { setGuestError("Pick a name with at least 2 characters!"); return; }
+    if (!name || name.length < 2) { setGuestError("Pick a name with at least 2 characters."); return; }
     if (name.length > 20) { setGuestError("Keep it under 20 characters."); return; }
     saveGuest(name);
     router.push("/");
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.6 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.4, duration: 0.3 }}
-        className="absolute top-4 right-4"
-      >
-        <ThemeToggle />
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, x: -10 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ delay: 0.3, duration: 0.3 }}
-        className="absolute top-4 left-4"
-      >
-        <button
-          onClick={() => router.push("/")}
-          className="inline-flex items-center gap-1.5 text-ink-muted hover:text-ink transition-colors text-sm font-bold focus-ring rounded-md px-2 py-1"
-        >
-          <ArrowLeft size={14} /> Home
-        </button>
-      </motion.div>
-
-      <motion.div
-        variants={stagger(0.1)}
-        initial="hidden"
-        animate="show"
-        className="w-full max-w-md space-y-4"
-      >
-
-        <motion.div variants={bounceIn} className="text-center mb-8">
-          <h1 className="font-marker text-7xl text-ink tracking-tight">Qrio</h1>
-          <p className="text-ink-soft mt-2 text-sm font-semibold tracking-wide">
-            Play. Compete. Learn. Together.
-          </p>
-        </motion.div>
-
-        {trialUsed && (
-          <motion.div
-            variants={fadeUp}
-            className="flex items-start gap-2 bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-500 rounded-xl px-4 py-3 text-amber-800 dark:text-amber-300 text-sm font-semibold"
-            style={{ boxShadow: "3px 3px 0px var(--accent-amber)" }}
-          >
-            <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-            <span>You&apos;ve used all your free guest games. Register to keep playing — it&apos;s free.</span>
+    <div className="min-h-svh flex flex-col">
+      <AuthBar />
+      <main className="flex-1 flex items-start sm:items-center justify-center px-4 pt-4 pb-12">
+        <motion.div variants={stagger(0.08)} initial="hidden" animate="show" className="w-full max-w-md">
+          <motion.div variants={fadeUp} className="text-center">
+            <span className="text-6xl sm:text-7xl"><Logo /></span>
+            <p className="mt-3 font-hand text-2xl text-ink-muted">
+              {tab === "login" ? "welcome back" : "keep your stats, play without limits"}
+            </p>
           </motion.div>
-        )}
 
-        <motion.div variants={fadeUp} className="sketch-card p-8">
-          <div className="flex gap-2 mb-6">
-            {(["login", "register"] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => { setTab(t); setError(""); }}
-                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition-all border-2 focus-ring ${
-                  tab === t
-                    ? "bg-ink text-on-ink border-ink shadow-[2px_2px_0_var(--shadow-soft)]"
-                    : "bg-card text-ink-muted border-line-soft hover:border-ink hover:text-ink"
-                }`}
-              >
-                {t === "login" ? <LogIn size={14} /> : <UserPlus size={14} />}
-                {t === "login" ? "Sign In" : "Register"}
-              </button>
-            ))}
-          </div>
+          {trialUsed && (
+            <motion.div variants={fadeUp} className="mt-6">
+              <Notice tone="info">You&apos;ve used your free guest games. Make a free account to keep playing.</Notice>
+            </motion.div>
+          )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-black text-ink-soft uppercase tracking-widest mb-1.5">
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                placeholder="you@example.com"
-                className="w-full sketch-inset px-4 py-3 text-ink placeholder-ink-ghost text-sm focus-ring"
-              />
+          <motion.section variants={fadeUp} className="mt-6 sketch-card p-5 sm:p-7">
+            {/* Sign in / Register switch */}
+            <div role="tablist" className="relative grid grid-cols-2 rounded-xl border-2 border-ink p-1" style={{ background: "var(--inset)" }}>
+              {(["login", "register"] as const).map((t) => (
+                <button
+                  key={t}
+                  role="tab"
+                  aria-selected={tab === t}
+                  onClick={() => { setTab(t); setError(""); }}
+                  className={`relative z-10 h-10 rounded-lg text-sm font-extrabold transition-colors focus-ring ${tab === t ? "text-hl-ink" : "text-ink-muted hover:text-ink"}`}
+                >
+                  {tab === t && (
+                    <motion.span
+                      layoutId="auth-tab"
+                      transition={{ duration: 0.3, ease: EASE }}
+                      className="absolute inset-0 -z-10 rounded-lg border-2 border-ink bg-hl"
+                    />
+                  )}
+                  {t === "login" ? "Sign in" : "Register"}
+                </button>
+              ))}
             </div>
 
-            <AnimatePresence initial={false}>
-              {tab === "register" && (
-                <motion.div
-                  key="username"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-                  className="overflow-hidden"
-                >
-                  <label className="block text-xs font-black text-ink-soft uppercase tracking-widest mb-1.5">
-                    Username
-                  </label>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                    minLength={3}
-                    maxLength={30}
-                    autoComplete="username"
-                    placeholder="coolplayer99"
-                    className="w-full sketch-inset px-4 py-3 text-ink placeholder-ink-ghost text-sm focus-ring"
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+              <div>
+                <label htmlFor="email" className="field-label mb-1.5">Email</label>
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  className="w-full sketch-inset px-4 h-12 text-base text-ink placeholder-ink-ghost"
+                />
+              </div>
 
-            <div>
-              <label className="flex items-center justify-between text-xs font-black text-ink-soft uppercase tracking-widest mb-1.5">
-                <span>Password</span>
-                {tab === "login" && (
+              <AnimatePresence initial={false}>
+                {tab === "register" && (
+                  <motion.div
+                    key="username"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.25, ease: EASE }}
+                    className="overflow-clip"
+                  >
+                    <label htmlFor="username" className="field-label mb-1.5">Username</label>
+                    <input
+                      id="username"
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      required
+                      minLength={3}
+                      maxLength={30}
+                      autoComplete="username"
+                      placeholder="What friends see in rooms"
+                      className="w-full sketch-inset px-4 h-12 text-base text-ink placeholder-ink-ghost"
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label htmlFor="password" className="field-label">Password</label>
+                  {tab === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => router.push("/forgot-password")}
+                      className="tap-inline text-sm font-bold text-ink-muted hover:text-ink underline-offset-2 hover:underline focus-ring rounded"
+                    >
+                      Forgot it?
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    id="password"
+                    type={showPw ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={tab === "register" ? 8 : 1}
+                    autoComplete={tab === "register" ? "new-password" : "current-password"}
+                    placeholder={tab === "register" ? "At least 8 characters" : "Your password"}
+                    className="w-full sketch-inset pl-4 pr-12 h-12 text-base text-ink placeholder-ink-ghost"
+                  />
                   <button
                     type="button"
-                    onClick={() => router.push("/forgot-password")}
-                    className="text-[10px] font-bold text-ink-muted hover:text-ink normal-case tracking-normal focus-ring rounded-md px-1"
+                    onClick={() => setShowPw((v) => !v)}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-10 h-10 inline-flex items-center justify-center rounded-lg text-ink-muted hover:text-ink transition-colors focus-ring"
+                    aria-label={showPw ? "Hide password" : "Show password"}
                   >
-                    Forgot?
+                    {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
-                )}
-              </label>
-              <div className="relative">
-                <input
-                  type={showPw ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={tab === "register" ? 8 : 1}
-                  autoComplete={tab === "register" ? "new-password" : "current-password"}
-                  placeholder={tab === "register" ? "At least 8 characters" : "••••••••"}
-                  className="w-full sketch-inset px-4 py-3 pr-12 text-ink placeholder-ink-ghost text-sm focus-ring"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink transition-colors p-1.5 focus-ring rounded-md"
-                  aria-label={showPw ? "Hide password" : "Show password"}
-                >
-                  {showPw ? <EyeOff size={17} /> : <Eye size={17} />}
-                </button>
-              </div>
-            </div>
-
-            <AnimatePresence>
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ type: "spring", stiffness: 380, damping: 22 }}
-                  className="flex items-center gap-2 bg-red-50 dark:bg-red-950/40 border-2 border-red-500 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm font-semibold"
-                  style={{ boxShadow: "3px 3px 0px var(--shadow-soft)" }}
-                >
-                  <AlertTriangle size={15} className="shrink-0" />
-                  {error}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <motion.button
-              type="submit"
-              disabled={loading}
-              whileTap={{ scale: 0.97 }}
-              whileHover={{ y: -1 }}
-              className="w-full sketch-btn-dark gap-2 py-3.5 text-sm focus-ring"
-            >
-              {loading
-                ? "Just a sec..."
-                : (
-                  <>
-                    {tab === "login" ? "Sign In" : "Create Account"}
-                    <ArrowRight size={15} />
-                  </>
-                )}
-            </motion.button>
-          </form>
-        </motion.div>
-
-        {!trialUsed && (
-          <>
-            <motion.div variants={fadeUp} className="flex items-center gap-3 px-2">
-              <div className="flex-1 border-t-2 border-line-soft" />
-              <span className="text-ink-faint text-xs uppercase tracking-wider font-black">or jump straight in</span>
-              <div className="flex-1 border-t-2 border-line-soft" />
-            </motion.div>
-
-            <motion.div variants={scaleIn} className="sketch-card p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <motion.div
-                  animate={{ y: [0, -4, 0] }}
-                  transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-                  className="w-11 h-11 bg-ink rounded-xl flex items-center justify-center shrink-0"
-                >
-                  <Zap size={20} className="text-on-ink" />
-                </motion.div>
-                <div>
-                  <h3 className="font-heading text-xl text-ink font-bold">Play as Guest</h3>
-                  <p className="text-ink-faint text-xs">No account needed — 2 free games</p>
                 </div>
               </div>
-              <form onSubmit={handleGuest} className="space-y-3">
+
+              <Notice>{error}</Notice>
+
+              <button type="submit" disabled={loading} className="w-full sketch-btn-accent gap-2 h-12 text-base focus-ring">
+                {loading
+                  ? <><Loader2 size={18} className="animate-spin" /> One sec…</>
+                  : <>{tab === "login" ? "Sign in" : "Create account"} <ArrowRight size={18} /></>}
+              </button>
+            </form>
+          </motion.section>
+
+          {!trialUsed && (
+            <motion.section variants={fadeUp} className="mt-6 rounded-2xl border-2 border-dashed border-ink p-5 sm:p-6">
+              <h2 className="font-heading text-xl text-ink">Just want to play?</h2>
+              <p className="mt-1 text-sm font-bold text-ink-muted">Pick a name. {GUEST_GAME_LIMIT} free games, no account.</p>
+              <form onSubmit={handleGuest} className="mt-4 flex flex-col sm:flex-row gap-2.5">
                 <input
                   type="text"
                   value={guestName}
                   onChange={(e) => { setGuestName(e.target.value); setGuestError(""); }}
                   maxLength={20}
-                  placeholder="e.g. ShadowFox, NeonBolt, ChaosQueen…"
-                  className="w-full sketch-inset px-4 py-3 text-ink placeholder-ink-ghost text-sm focus-ring"
+                  aria-label="Guest name"
+                  placeholder="e.g. ShadowFox"
+                  className="w-full sm:flex-1 min-w-0 sketch-inset px-4 h-12 text-base text-ink placeholder-ink-ghost"
                 />
-                <AnimatePresence>
-                  {guestError && (
-                    <motion.p
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="text-red-600 dark:text-red-400 text-xs px-1 font-bold"
-                    >
-                      {guestError}
-                    </motion.p>
-                  )}
-                </AnimatePresence>
-                <motion.button
-                  type="submit"
-                  whileTap={{ scale: 0.97 }}
-                  whileHover={{ y: -1 }}
-                  className="w-full sketch-btn-dark gap-2 py-3.5 focus-ring"
-                >
-                  Jump In <ArrowRight size={15} />
-                </motion.button>
+                <button type="submit" className="sketch-btn-dark gap-2 h-12 px-5 text-base shrink-0 focus-ring">
+                  Jump in <ArrowRight size={17} />
+                </button>
               </form>
-            </motion.div>
-          </>
-        )}
-
-      </motion.div>
+              <Notice className="mt-3">{guestError}</Notice>
+            </motion.section>
+          )}
+        </motion.div>
+      </main>
     </div>
   );
 }

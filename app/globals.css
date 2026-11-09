@@ -1,68 +1,96 @@
 @import "tailwindcss";
 
+/* The theme lives on <html class="dark">, not the OS setting, so Tailwind's
+   `dark:` variant has to follow the class too. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ───────────────────────────────────────────────────────────────────────────
- * Theme tokens — every page references these via utility classes (.bg-paper,
- * .text-ink, .sketch-card …) so flipping `dark` on <html> retheme the whole
- * app without touching component code.
+ * Design system: "a quiz on paper that marks itself".
+ *
+ * Paper and ink carry everything; one highlighter yellow (--hl) means "this
+ * is the action / this is what you picked"; green and red only ever mean
+ * right and wrong. Every page uses these tokens through the utilities below, so
+ * flipping `dark` on <html> rethemes the app without touching components.
+ * Dark mode is true black paper with white ink.
  * ─────────────────────────────────────────────────────────────────────────── */
 :root {
-  --paper:        #edecea;
-  --paper-dot:    #c5c3bc;
-  --card:         #ffffff;
-  --card-soft:    #fafaf8;
-  --inset:        #fafaf8;
+  --paper:        #f1eee6;
+  --paper-dot:    #d6d1c5;
+  --card:         #fffdf8;
+  --card-soft:    #f8f5ee;
+  --inset:        #fbf9f3;
 
-  --ink:          #1a1a1a;
-  --ink-strong:   #000000;
-  --ink-soft:     #555555;
-  --ink-muted:    #888888;
-  --ink-faint:    #aaaaaa;
-  --ink-ghost:    #cccccc;
-  --ink-on-fill:  #ffffff;       /* text colour over a solid `--ink` block */
+  --ink:          #1b1a17;
+  --ink-soft:     #4a4740;
+  --ink-muted:    #6b675f;
+  --ink-faint:    #8a857b;
+  --ink-ghost:    #b9b4a9;
+  --ink-on-fill:  #fffdf8;       /* text over a solid `--ink` block */
 
-  --line:         #1a1a1a;
-  --line-soft:    #dddddd;
-  --line-faint:   #f0efea;
-  --line-ghost:   #eeeeee;
+  --line:         #1b1a17;
+  --line-soft:    #d9d4c8;
+  --line-faint:   #ebe7dd;
 
-  --shadow:       #1a1a1a;
-  --shadow-soft:  #555555;
+  --shadow:       #1b1a17;
+  --shadow-soft:  #4a4740;
 
-  --accent-emerald: #059669;
-  --accent-red:     #dc2626;
-  --accent-amber:   #f59e0b;
-  --accent-blue:    #2563eb;
+  /* The highlighter. Text on it is always dark, in both themes. */
+  --hl:           #ffd43b;
+  --hl-ink:       #1b1a17;
+  --hl-soft:      #fff3c4;
+
+  /* Right / wrong. `-mark` is the marker stroke, `-tint` the wash behind. */
+  --good:         #15803d;
+  --good-mark:    #16a34a;
+  --good-tint:    #e4f4e4;
+  --bad:          #c2261d;
+  --bad-mark:     #dc2626;
+  --bad-tint:     #fbe6e2;
+
+  /* Notebook rules on the question sheet. */
+  --rule:         #c9dcef;
+  --margin:       #f0a8a0;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   color-scheme: light;
 }
 
 .dark {
-  --paper:        #131316;
-  --paper-dot:    #2a2a2e;
-  --card:         #1f1f23;
-  --card-soft:    #18181c;
-  --inset:        #15151a;
+  --paper:        #000000;
+  --paper-dot:    #2e2e2e;
+  --card:         #0e0e0e;
+  --card-soft:    #0a0a0a;
+  --inset:        #070707;
 
-  --ink:          #f1f1ee;
-  --ink-strong:   #ffffff;
-  --ink-soft:     #d6d6d2;       /* was #c4c4c0 — brighter for body copy in dark mode */
-  --ink-muted:    #a8a8ac;       /* was #8a8a8e — bumped for label/meta text */
-  --ink-faint:    #888890;       /* was #6a6a6e — was too dim against #131316 paper */
-  --ink-ghost:    #606068;       /* was #44444a — still subtle but readable */
-  --ink-on-fill:  #131316;       /* dark text over the now-light `--ink` */
+  --ink:          #f3f0e8;
+  --ink-soft:     #d9d5cb;
+  --ink-muted:    #a6a29a;
+  --ink-faint:    #8a867e;
+  --ink-ghost:    #57544e;
+  --ink-on-fill:  #000000;
 
-  --line:         #f1f1ee;
-  --line-soft:    #38383e;
-  --line-faint:   #26262c;
-  --line-ghost:   #2c2c32;
+  --line:         #e8e4da;
+  --line-soft:    #2f2f2f;
+  --line-faint:   #1c1c1c;
 
-  --shadow:       #000000;
-  --shadow-soft:  #000000;
+  /* Nothing is darker than black, so shadows lift in grey instead. */
+  --shadow:       #343434;
+  --shadow-soft:  #262626;
 
-  --accent-emerald: #34d399;
-  --accent-red:     #f87171;
-  --accent-amber:   #fbbf24;
-  --accent-blue:    #60a5fa;
+  --hl:           #ffd43b;
+  --hl-ink:       #1b1a17;
+  --hl-soft:      #2b2410;
+
+  --good:         #4ade80;
+  --good-mark:    #4ade80;
+  --good-tint:    #0b1f12;
+  --bad:          #f87171;
+  --bad-mark:     #f87171;
+  --bad-tint:     #2a0f0d;
+
+  --rule:         #1d2633;
+  --margin:       #4a2422;
 
   color-scheme: dark;
 }
@@ -73,234 +101,318 @@
   --font-marker: var(--font-marker);
 }
 
-/* ── Body: paper + dot grid + ink colour, theme-aware ── */
+/* ── Body: paper + dot grid, theme-aware ── */
 body {
   background-color: var(--paper);
-  background-image: radial-gradient(circle, var(--paper-dot) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background-image: radial-gradient(circle at 1px 1px, var(--paper-dot) 1px, transparent 0);
+  background-size: 22px 22px;
   color: var(--ink);
+  overflow-x: clip;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
+/* <DotField> draws the moving dots once it's running. */
+html[data-dots="live"] body { background-image: none; }
 
 /* Smooth out theme flips for tokens but not for layout-affecting properties */
 .sketch-card,
-.sketch-card-sm,
-.sketch-inset,
-.sketch-btn-dark,
-.sketch-btn-light {
+.sketch-inset {
   transition:
     background-color 0.25s ease,
     color 0.25s ease,
     border-color 0.25s ease,
-    box-shadow 0.15s ease,
-    transform 0.1s ease;
+    box-shadow 0.15s var(--ease);
 }
 
 @layer utilities {
-  .font-body    { font-family: var(--font-body),    ui-sans-serif, system-ui, sans-serif; }
-  .font-heading { font-family: var(--font-heading), ui-sans-serif, system-ui, sans-serif; }
-  .font-marker  { font-family: var(--font-marker),  cursive; }
+  /* Three voices: print (Nunito) for reading, heavy print for headings,
+     hand (Caveat) for notes, marker for the logo and verdicts. */
+  .font-body    { font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif; }
+  .font-heading {
+    font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+  }
+  .font-hand    { font-family: var(--font-heading), cursive; font-weight: 700; letter-spacing: 0; }
+  .font-marker  { font-family: var(--font-marker), cursive; font-weight: 400; letter-spacing: 0.01em; }
 
   /* ── Token-backed colour utilities (use these instead of hex) ── */
   .bg-paper       { background-color: var(--paper); }
   .bg-card        { background-color: var(--card); }
   .bg-card-soft   { background-color: var(--card-soft); }
-  .bg-inset       { background-color: var(--inset); }
   .bg-ink         { background-color: var(--ink); }
+  .bg-hl          { background-color: var(--hl); }
+  .bg-hl-soft     { background-color: var(--hl-soft); }
+  .bg-good-tint   { background-color: var(--good-tint); }
+  .bg-bad-tint    { background-color: var(--bad-tint); }
 
   .text-ink         { color: var(--ink); }
-  .text-ink-strong  { color: var(--ink-strong); }
   .text-ink-soft    { color: var(--ink-soft); }
   .text-ink-muted   { color: var(--ink-muted); }
   .text-ink-faint   { color: var(--ink-faint); }
   .text-ink-ghost   { color: var(--ink-ghost); }
   .text-on-ink      { color: var(--ink-on-fill); }
+  .text-hl-ink      { color: var(--hl-ink); }
+  .text-good        { color: var(--good); }
+  .text-bad         { color: var(--bad); }
 
   .placeholder-ink-ghost::placeholder { color: var(--ink-ghost); }
 
   .border-ink         { border-color: var(--line); }
   .border-line-soft   { border-color: var(--line-soft); }
   .border-line-faint  { border-color: var(--line-faint); }
-  .border-line-ghost  { border-color: var(--line-ghost); }
+  .border-good        { border-color: var(--good-mark); }
+  .border-bad         { border-color: var(--bad-mark); }
 
   .divide-line-faint > * + * { border-color: var(--line-faint); }
+}
 
-  /* ── Sketch component tokens ── */
+/* Component classes sit in the components layer so Tailwind utilities on the
+   same element (hidden, w-full, rounded-*) always win over them. */
+@layer components {
+  /* ── Surfaces ── */
   .sketch-card {
     background: var(--card);
     border: 2px solid var(--line);
-    border-radius: 12px;
+    border-radius: 16px;
     box-shadow: 4px 4px 0 var(--shadow);
-  }
-  .sketch-card-sm {
-    background: var(--card);
-    border: 2px solid var(--line);
-    border-radius: 8px;
-    box-shadow: 3px 3px 0 var(--shadow);
   }
   .sketch-inset {
     background: var(--inset);
     border: 2px solid var(--line);
-    border-radius: 8px;
+    border-radius: 12px;
     color: var(--ink);
   }
   .sketch-inset:focus,
   .sketch-inset:focus-within {
     outline: none;
     border-color: var(--line);
-    box-shadow: 2px 2px 0 var(--shadow);
+    box-shadow: 3px 3px 0 var(--hl);
   }
 
-  /* ── Buttons ── */
-  .sketch-btn-dark {
-    background: var(--ink);
-    color: var(--ink-on-fill);
-    border: 2px solid var(--ink);
-    border-radius: 10px;
-    box-shadow: 3px 3px 0 var(--shadow-soft);
-    font-weight: 700;
-    cursor: pointer;
-    display: inline-flex;
+  /* A notebook page: faint rules under each line of text and a margin line.
+     Set --rule-h to the text's line-height so writing sits on the rules. */
+  .notebook {
+    background-color: var(--card);
+    background-image:
+      linear-gradient(90deg, transparent 2.25rem, var(--margin) 2.25rem, var(--margin) calc(2.25rem + 2px), transparent calc(2.25rem + 2px)),
+      repeating-linear-gradient(to bottom, transparent 0 calc(var(--rule-h, 2rem) - 1px), var(--rule) calc(var(--rule-h, 2rem) - 1px) var(--rule-h, 2rem));
+  }
+  @media (min-width: 640px) {
+    .notebook { background-image:
+      linear-gradient(90deg, transparent 2.75rem, var(--margin) 2.75rem, var(--margin) calc(2.75rem + 2px), transparent calc(2.75rem + 2px)),
+      repeating-linear-gradient(to bottom, transparent 0 calc(var(--rule-h, 2rem) - 1px), var(--rule) calc(var(--rule-h, 2rem) - 1px) var(--rule-h, 2rem)); }
+  }
+
+  /* Field labels: short, sentence case, bold. */
+  .field-label {
+    display: flex;
     align-items: center;
-    justify-content: center;
-  }
-  .sketch-btn-dark:hover:not(:disabled) {
-    transform: translate(-1px, -1px);
-    box-shadow: 4px 4px 0 var(--shadow-soft);
-  }
-  .sketch-btn-dark:active:not(:disabled) {
-    transform: translate(2px, 2px);
-    box-shadow: 1px 1px 0 var(--shadow-soft);
-  }
-  .sketch-btn-dark:disabled { opacity: 0.45; cursor: not-allowed; }
-
-  .sketch-btn-light {
-    background: var(--card);
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 800;
     color: var(--ink);
-    border: 2px solid var(--line);
-    border-radius: 10px;
-    box-shadow: 3px 3px 0 var(--shadow);
-    font-weight: 700;
-    cursor: pointer;
+  }
+
+  /* ── Buttons: ink outline, hard shadow, pressed on tap ── */
+  .sketch-btn-accent,
+  .sketch-btn-dark,
+  .sketch-btn-light {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    border: 2px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 3px 3px 0 var(--shadow);
+    font-weight: 800;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      transform 0.15s var(--ease),
+      box-shadow 0.15s var(--ease),
+      background-color 0.25s ease,
+      color 0.25s ease,
+      border-color 0.25s ease;
   }
-  .sketch-btn-light:hover:not(:disabled) {
-    transform: translate(-1px, -1px);
-    box-shadow: 4px 4px 0 var(--shadow);
+  .sketch-btn-accent { background: var(--hl); color: var(--hl-ink); }
+  .sketch-btn-dark   { background: var(--ink); color: var(--ink-on-fill); border-color: var(--ink); box-shadow: 3px 3px 0 var(--shadow-soft); }
+  .sketch-btn-light  { background: var(--card); color: var(--ink); }
+  .dark .sketch-btn-accent { border-color: var(--hl); }
+
+  .sketch-btn-accent:disabled,
+  .sketch-btn-dark:disabled,
+  .sketch-btn-light:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Pressable surfaces that aren't buttons-by-class (option rows, mode tiles). */
+  .pressable {
+    transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease), background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
-  .sketch-btn-light:active:not(:disabled) {
-    transform: translate(2px, 2px);
-    box-shadow: 1px 1px 0 var(--shadow);
-  }
-  .sketch-btn-light:disabled { opacity: 0.45; cursor: not-allowed; }
 
   /* ── Focus ring (a11y) — visible only on keyboard nav ── */
   .focus-ring:focus-visible {
     outline: 3px solid var(--ink);
     outline-offset: 3px;
-    border-radius: 6px;
+    border-radius: 8px;
   }
 
-  /* ── Animations ── */
-  .animate-pop        { animation: pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  /* Marker strike through a wrong answer, one stroke per wrapped line. */
+  .strike-mark {
+    background-image: linear-gradient(var(--bad-mark), var(--bad-mark));
+    background-repeat: no-repeat;
+    background-position: 0 58%;
+    background-size: 100% 3px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    animation: strike 0.35s var(--ease) 0.1s both;
+  }
+
+  /* Text that turns dark as a highlighter sweeps in under it (in dark mode
+     it starts light so it's never dark-on-dark). */
+  .hl-text { animation: ink-to-hl 0.3s var(--ease) both; }
+
+  /* Tape strip holding a sheet to the page. */
+  .tape {
+    position: absolute;
+    width: 5.5rem;
+    height: 1.4rem;
+    background: color-mix(in srgb, var(--hl) 55%, transparent);
+    border-left: 2px dashed color-mix(in srgb, var(--ink) 12%, transparent);
+    border-right: 2px dashed color-mix(in srgb, var(--ink) 12%, transparent);
+  }
+
+  /* ── Animations (game feedback only; nothing loops idly) ── */
+  .animate-pop        { animation: pop 0.35s var(--ease); }
   .animate-shake      { animation: shake 0.45s ease-out; }
-  .animate-slide-up   { animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
-  .animate-bounce-in  { animation: bounce-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
-  .animate-float      { animation: float 3s ease-in-out infinite; }
-  .animate-fade-in    { animation: fade-in 0.3s ease-out; }
-  .animate-scale-in   { animation: scale-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
-  .animate-spin-slow  { animation: spin 1.2s linear infinite; }
-  .animate-wiggle     { animation: wiggle 0.6s ease-in-out infinite; }
 }
 
-@keyframes spin       { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-@keyframes pop        { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+/* Hover lifts only where there's a real pointer; touch gets the press. */
+@media (hover: hover) and (pointer: fine) {
+  .sketch-btn-accent:hover:not(:disabled),
+  .sketch-btn-light:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--shadow);
+  }
+  .sketch-btn-dark:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--shadow-soft);
+  }
+  .pressable:hover:not(:disabled) {
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0 var(--shadow);
+  }
+  .pressable-flat:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--shadow);
+  }
+}
+
+/* Pressed state. Unlayered and after the hover rules, so it wins over both
+   the hover lift and any shadow utility on the element. */
+.sketch-btn-accent:active:not(:disabled),
+.sketch-btn-light:active:not(:disabled),
+.pressable:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--shadow);
+}
+.sketch-btn-dark:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--shadow-soft);
+}
+
+@keyframes pop        { 0% { transform: scale(1); } 45% { transform: scale(1.04); } 100% { transform: scale(1); } }
 @keyframes shake {
-  0%, 100% { transform: translateX(0) rotate(0); }
-  15%      { transform: translateX(-8px) rotate(-1.5deg); }
-  30%      { transform: translateX(7px)  rotate(1.5deg); }
-  45%      { transform: translateX(-5px) rotate(-1deg); }
-  60%      { transform: translateX(4px)  rotate(0.5deg); }
-  75%      { transform: translateX(-2px); }
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-6px); }
+  40%      { transform: translateX(5px); }
+  60%      { transform: translateX(-3px); }
+  80%      { transform: translateX(2px); }
 }
-@keyframes slide-up   { from { transform: translateY(18px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes bounce-in  { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.06); } 100% { transform: scale(1); opacity: 1; } }
-@keyframes float      { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
-@keyframes fade-in    { from { opacity: 0; } to { opacity: 1; } }
-@keyframes scale-in   { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-@keyframes wiggle     { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@keyframes ink-to-hl  { from { color: var(--ink); } to { color: var(--hl-ink); } }
+@keyframes strike     { from { background-size: 0% 3px; } to { background-size: 100% 3px; } }
 
-/* ── Custom range slider (sketch style) ── */
+/* ── Range slider: ink track, highlighter fill up to the value ── */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
+  height: 28px;
+  cursor: pointer;
+  --fill: 50%;
 }
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 5px;
-  border-radius: 0;
-  background: var(--ink);
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid var(--line);
+  background: linear-gradient(90deg, var(--hl) var(--fill), var(--inset) var(--fill));
 }
 input[type="range"]::-moz-range-track {
-  height: 5px;
-  background: var(--ink);
+  height: 6px;
+  border-radius: 999px;
+  border: 2px solid var(--line);
+  background: var(--inset);
+}
+input[type="range"]::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--hl);
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--card);
-  cursor: pointer;
-  margin-top: -8px;
-  border: 2px solid var(--ink);
+  margin-top: -9px;
+  border: 2px solid var(--line);
   box-shadow: 2px 2px 0 var(--shadow);
-  transition: transform 0.15s;
+  transition: transform 0.15s var(--ease);
 }
-input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.15); }
 input[type="range"]::-moz-range-thumb {
   width: 20px;
   height: 20px;
   border-radius: 50%;
   background: var(--card);
-  cursor: pointer;
-  border: 2px solid var(--ink);
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--shadow);
 }
+input[type="range"]:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; border-radius: 999px; }
 
 /* ── Scrollbar polish ── */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: var(--line-soft); border-radius: 999px; }
 *::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
 /* ── Details/summary ── */
 details summary { cursor: pointer; list-style: none; }
 details summary::-webkit-details-marker { display: none; }
 details[open] summary .chevron { transform: rotate(180deg); }
-.chevron { transition: transform 0.2s ease; }
+.chevron { transition: transform 0.2s var(--ease); }
 
 /* ── Selection ── */
-::selection { background: var(--ink); color: var(--ink-on-fill); }
+::selection { background: var(--hl); color: var(--hl-ink); }
 
-/* ── Reduced-motion friendly: disable big animations for users who prefer it ── */
+/* ── Reduced motion: no movement, everything already in its final state ── */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
 }
 
-/* ── Touch-target hint: ensure interactive elements meet 44x44 minimum ── */
+/* ── Touch targets: interactive elements at least 44px tall on touch ── */
 @media (pointer: coarse) {
-  button, a, [role="button"] { min-height: 40px; }
+  button, a, [role="button"] { min-height: 44px; }
+  .tap-inline { min-height: 0; }
 }
-
-/* ── Hide overflow during page transitions to avoid scrollbar flicker ── */
-html { overflow-x: hidden; }

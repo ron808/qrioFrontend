@@ -1,17 +1,33 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "@/lib/api";
 import { hasUser, getHomePath, isLoggedIn, incrementGuestGamesPlayed, guestMustRegister } from "@/lib/auth";
-import { saveSoloGame, qDiffMultiplier } from "@/lib/stats";
-import { fadeUp, scaleIn, stagger } from "@/lib/motion";
-import PageShell from "../components/PageShell";
+import { getStats, saveSoloGame, calcSoloScore, soloPointsPerCorrect, type GameRecord } from "@/lib/stats";
+import { EASE, fadeUp, stagger } from "@/lib/motion";
 import {
-  Target, Leaf, Skull, Swords, Infinity as InfinityIcon, Flame, Timer,
-  BookOpen, Hash, Brain, AlertTriangle, ArrowRight, Check, X,
-  Trophy, Star, ThumbsUp, RotateCcw, Home, ChevronDown, Bot, SkipForward,
+  LOADING_LINES, QDIFF_FLAVOR, RIGHT_HEADLINES, STAMPS, TIMER_FLAVOR, WAITING_FACTS, WRONG_HEADLINES,
+  calloutFor, earnedStamps, earnedTitle, pick, quizName, randomPick, resultGrid, teacherComment,
+  type Callout,
+} from "@/lib/fun";
+import { buzz, play } from "@/lib/sound";
+import { pulseDots, pulseFrom } from "@/lib/pulse";
+import PageShell from "../components/PageShell";
+import Notice from "../components/Notice";
+import Confetti from "../components/Confetti";
+import ShareDialog from "../components/ShareDialog";
+import { MarkerLoop, Scribble } from "../components/Marks";
+import {
+  FeedbackBar, OptionButton, ProgressTicks, QuestionSheet, QuestionTransition, SoundToggle, Stamp, TimerRing,
+  STAMP_DELAY, TRANSITION_MS, useKeepAboveFeedback, type OptionState, type TickState,
+} from "../components/GameUI";
+import {
+  ChoiceGrid, CountSlider, TopicInput, QUESTION_DIFFICULTY_CHOICES, TIMER_CHOICES,
+} from "../components/QuizSettings";
+import {
+  ArrowRight, Check, ChevronDown, Flame, Home, Lightbulb, RotateCcw, Share2, SkipForward, Trophy, X,
 } from "lucide-react";
 import {
   DIFFICULTY_CONFIG,
@@ -24,110 +40,174 @@ import {
 
 type Phase = "setup" | "generating" | "playing" | "results";
 
-const OPTION_LABELS = ["A", "B", "C", "D"];
-const TRANSITION_MS = 1500;
-
-function QuestionDifficultyIcon({ d }: { d: QuestionDifficulty }) {
-  if (d === "easy") return <Leaf size={20} />;
-  if (d === "medium") return <Target size={20} />;
-  if (d === "hard") return <Skull size={20} />;
-  return <Swords size={20} />;
+/** Bits of a game that only matter for stamps and callouts. */
+interface Extras {
+  rightTimes: number[];
+  clutches: number;
+  comebacks: number;
 }
 
-function TimerDifficultyIcon({ d }: { d: Difficulty }) {
-  if (d === "none") return <InfinityIcon size={20} />;
-  if (d === "easy") return <Leaf size={20} />;
-  if (d === "medium") return <Timer size={20} />;
-  return <Flame size={20} />;
-}
+const NO_EXTRAS: Extras = { rightTimes: [], clutches: 0, comebacks: 0 };
 
-function CircularTimer({ seconds, total }: { seconds: number; total: number }) {
-  const r = 26;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (seconds / total) * circ;
-  const dangerZone = seconds <= 5;
-  const warnZone = !dangerZone && seconds <= Math.floor(total * 0.4);
-  const stroke = dangerZone ? "var(--accent-red)" : warnZone ? "var(--accent-amber)" : "var(--ink)";
+/** "Writing your questions": lines appear on a notebook page, one by one. */
+function WritingSheet() {
+  const widths = ["86%", "70%", "92%", "58%"];
   return (
-    <div className="relative w-16 h-16">
-      <svg className="w-16 h-16 -rotate-90" viewBox="0 0 60 60">
-        <circle cx="30" cy="30" r={r} fill="none" stroke="var(--line-soft)" strokeWidth="5" />
-        <circle
-          cx="30" cy="30" r={r} fill="none"
-          stroke={stroke} strokeWidth="5" strokeLinecap="square"
-          strokeDasharray={circ}
-          strokeDashoffset={offset}
-          style={{ transition: "stroke-dashoffset 1s linear, stroke 0.3s" }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
+    <div className="relative w-full sketch-card notebook h-40 [--rule-h:2rem] overflow-clip" aria-hidden="true">
+      {widths.map((w, i) => (
         <motion.span
-          key={seconds}
-          initial={{ scale: 1.4, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.2 }}
-          className="text-lg font-black tabular-nums"
-          style={{ color: stroke }}
-        >
-          {seconds}
-        </motion.span>
+          key={i}
+          className="absolute left-12 h-2 rounded-full origin-left"
+          style={{ top: `${1.25 + i * 2}rem`, width: `calc(${w} - 4rem)`, background: "var(--ink-soft)" }}
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: [0, 1, 1, 0] }}
+          transition={{ duration: 3.2, times: [0, 0.3, 0.85, 1], delay: i * 0.45, repeat: Infinity, repeatDelay: 0.4, ease: EASE }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** While Claude writes the questions: rotating silly status lines and a fact to read. */
+function GeneratingScreen({ tags, count, questionDifficulty }: {
+  tags: string[];
+  count: number;
+  questionDifficulty: QuestionDifficulty;
+}) {
+  const [tick, setTick] = useState(0);
+  const [fact] = useState(() => randomPick(WAITING_FACTS));
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 2200);
+    return () => window.clearInterval(id);
+  }, []);
+  // Every other line is about one of their topics.
+  const line = tick % 2 === 1 && tags.length
+    ? `Reading up on ${tags[Math.floor(tick / 2) % tags.length]}…`
+    : LOADING_LINES[Math.floor(tick / 2) % LOADING_LINES.length];
+
+  return (
+    <div className="min-h-svh flex items-center justify-center p-6">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: EASE }}
+        className="w-full max-w-md text-center"
+        role="status"
+      >
+        <WritingSheet />
+        <h2 className="mt-8 font-heading text-3xl text-ink">Writing your questions…</h2>
+        <div className="h-16 mt-1">
+          <AnimatePresence mode="wait">
+            <motion.p
+              key={tick}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.25, ease: EASE }}
+              className="font-hand text-2xl leading-8 text-ink-muted text-balance"
+            >
+              {line}
+            </motion.p>
+          </AnimatePresence>
+        </div>
+        <p className="text-base font-semibold text-ink-soft">
+          {count} {QUESTION_DIFFICULTY_CONFIG[questionDifficulty].label.toLowerCase()} questions on
+        </p>
+        <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+          {tags.map((t) => (
+            <span key={t} className="rounded-full border-2 border-ink bg-hl px-3 py-0.5 text-sm font-extrabold text-hl-ink">{t}</span>
+          ))}
+        </div>
+        <div className="mt-10 sketch-card p-4 sm:p-5 text-left -rotate-1">
+          <p className="field-label"><Lightbulb size={16} /> While you wait</p>
+          <p className="mt-1.5 text-[15px] font-semibold leading-snug text-ink-soft">{fact}</p>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+/** Desktop: a live preview of the quiz you're setting up, with the start button. */
+function QuizTicket({
+  tags, count, questionDifficulty, difficulty, maxPoints, best, error, onStart,
+}: {
+  tags: string[];
+  count: number;
+  questionDifficulty: QuestionDifficulty;
+  difficulty: Difficulty;
+  maxPoints: number;
+  best: number | null;
+  error: string;
+  onStart: () => void;
+}) {
+  const name = quizName(tags, questionDifficulty);
+  const seconds = DIFFICULTY_CONFIG[difficulty].seconds;
+  return (
+    <div className="sketch-card overflow-clip">
+      <div className="px-6 pt-6 pb-5 border-b-2 border-dashed border-line-soft">
+        <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-ink-muted">Your quiz</p>
+        <h2 className={`mt-2 font-heading text-[28px] leading-[1.05] text-balance ${name ? "text-ink" : "text-ink-ghost"}`}>
+          {name ?? "Untitled quiz"}
+        </h2>
+        {!name && <p className="mt-1 font-hand text-xl text-ink-muted">add a topic to give it a name</p>}
+      </div>
+      <div className="px-6 py-5 space-y-5">
+        <div>
+          <p className="text-sm font-extrabold text-ink">
+            {count} questions · {QUESTION_DIFFICULTY_CONFIG[questionDifficulty].label} · {seconds ? `${seconds}s each` : "no timer"}
+          </p>
+          <div className="mt-2.5 flex flex-wrap gap-1.5" aria-hidden="true">
+            <AnimatePresence initial={false}>
+              {Array.from({ length: count }, (_, i) => (
+                <motion.span
+                  key={i}
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  exit={{ scale: 0 }}
+                  transition={{ duration: 0.15, ease: EASE }}
+                  className="w-5 h-5 rounded-md border-2 border-ink bg-card"
+                />
+              ))}
+            </AnimatePresence>
+          </div>
+        </div>
+        <ul className="space-y-1 font-hand text-[22px] leading-tight text-ink-soft">
+          <li>{QDIFF_FLAVOR[questionDifficulty]}</li>
+          <li>{TIMER_FLAVOR[difficulty]}</li>
+        </ul>
+        <dl className="grid grid-cols-2 gap-3 pt-5 border-t-2 border-dashed border-line-soft">
+          <div>
+            <dd className="font-heading text-3xl text-ink tabular-nums leading-none">{maxPoints}</dd>
+            <dt className="mt-1.5 text-xs font-bold text-ink-muted">points up for grabs</dt>
+          </div>
+          <div>
+            <dd className="font-heading text-3xl text-ink tabular-nums leading-none">{best ?? "—"}</dd>
+            <dt className="mt-1.5 text-xs font-bold text-ink-muted">{best ? "your best on these" : "first try on these"}</dt>
+          </div>
+        </dl>
+        <Notice>{error}</Notice>
+        <button onClick={onStart} className="w-full sketch-btn-accent gap-2 h-14 text-lg focus-ring">
+          Start {count} questions <ArrowRight size={20} />
+        </button>
       </div>
     </div>
   );
 }
 
-function QuestionTransition({ nextNum, total }: { nextNum: number; total: number }) {
-  const [progress, setProgress] = useState(0);
-  const r = 30;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - progress * circ;
-
-  useEffect(() => {
-    const start = Date.now();
-    const id = setInterval(() => {
-      const p = Math.min((Date.now() - start) / TRANSITION_MS, 1);
-      setProgress(p);
-      if (p >= 1) clearInterval(id);
-    }, 16);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="absolute inset-0 flex flex-col items-center justify-center bg-paper z-20"
-    >
-      <div className="relative w-24 h-24">
-        <svg className="w-24 h-24 -rotate-90" viewBox="0 0 70 70">
-          <circle cx="35" cy="35" r={r} fill="none" stroke="var(--line-soft)" strokeWidth="6" />
-          <circle
-            cx="35" cy="35" r={r} fill="none"
-            stroke="var(--ink)" strokeWidth="6" strokeLinecap="round"
-            strokeDasharray={circ}
-            strokeDashoffset={offset}
-          />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="font-black text-xl text-ink">Q{nextNum}</span>
-        </div>
-      </div>
-      <p className="mt-5 font-bold text-ink-soft">Question {nextNum} of {total}</p>
-    </motion.div>
-  );
-}
-
 export default function SoloPage() {
   const router = useRouter();
+  const [tags, setTags] = useState<string[]>([]);
+  const [history, setHistory] = useState<GameRecord[]>([]);
+
   useEffect(() => {
     if (!hasUser()) { router.replace("/"); return; }
-    if (guestMustRegister()) { router.replace("/login?reason=trial_used"); }
+    if (guestMustRegister()) { router.replace("/login?reason=trial_used"); return; }
+    // "Topic of the day" and other links can pre-fill a topic.
+    const topic = new URLSearchParams(window.location.search).get("topic")?.trim();
+    if (topic) setTags([topic.slice(0, 50)]);
+    setHistory(getStats().recentGames.filter((g) => g.type === "solo"));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [tagInput, setTagInput] = useState("");
-  const [tags, setTags] = useState<string[]>([]);
   const [count, setCount] = useState(5);
   const [questionDifficulty, setQuestionDifficulty] = useState<QuestionDifficulty>("medium");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
@@ -136,50 +216,63 @@ export default function SoloPage() {
   const [phase, setPhase] = useState<Phase>("setup");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
+  /** The picked option; -1 once the question ended without one (skipped or timed out). */
   const [answered, setAnswered] = useState<number | null>(null);
+  const [noAnswer, setNoAnswer] = useState<"skip" | "timeout" | null>(null);
   const [answers, setAnswers] = useState<(AnswerRecord | null)[]>([]);
   const [timeLeft, setTimeLeft] = useState(0);
-  const [animClass, setAnimClass] = useState("");
   const [inTransition, setInTransition] = useState(false);
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
+  const [lostStreak, setLostStreak] = useState(0);
+  const [missRun, setMissRun] = useState(0);
+  const [callout, setCallout] = useState<Callout | null>(null);
+  const [extras, setExtras] = useState<Extras>(NO_EXTRAS);
   const [speedBonusAccum, setSpeedBonusAccum] = useState(0);
+  const [gameSeed, setGameSeed] = useState(0);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const inTransitionRef = useRef(false);
   const statsSaved = useRef(false);
+  const questionStart = useRef(0);
+  const lastTick = useRef(0);
+  const optionsRef = useRef<HTMLDivElement>(null);
 
   const timerSeconds = DIFFICULTY_CONFIG[difficulty].seconds;
-
-  function addTag(raw: string) {
-    const t = raw.trim().replace(/,+$/, "");
-    if (t && !tags.includes(t) && tags.length < 10) setTags((p) => [...p, t]);
-    setTagInput("");
-  }
-  function handleTagKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); }
-    if (e.key === "Backspace" && !tagInput && tags.length) setTags((p) => p.slice(0, -1));
-  }
+  useKeepAboveFeedback(optionsRef, phase === "playing" && answered !== null && !inTransition);
 
   async function handleStart() {
-    if (tags.length === 0) { setSetupError("Add at least one topic!"); return; }
+    if (tags.length === 0) { setSetupError("Add at least one topic first."); return; }
     setSetupError("");
     statsSaved.current = false;
     setStreak(0);
     setBestStreak(0);
+    setMissRun(0);
+    setExtras(NO_EXTRAS);
     setSpeedBonusAccum(0);
+    setGameSeed(Math.floor(Math.random() * 1000));
+    setShareOpen(false);
     setPhase("generating");
     try {
       const res = await api.generateQuestions(tags, count, questionDifficulty);
       setQuestions(res.questions);
       setAnswers(new Array(res.questions.length).fill(null));
       setCurrentQ(0);
-      setAnswered(null);
+      resetQuestion();
       if (timerSeconds > 0) setTimeLeft(timerSeconds);
+      questionStart.current = Date.now();
       setPhase("playing");
     } catch (err) {
       setSetupError(err instanceof Error ? err.message : "Generation failed");
       setPhase("setup");
     }
+  }
+
+  function resetQuestion() {
+    setAnswered(null);
+    setNoAnswer(null);
+    setCallout(null);
+    setLostStreak(0);
   }
 
   function advanceQ(questionsArr: Question[], qIndex: number) {
@@ -193,94 +286,169 @@ export default function SoloPage() {
     setInTransition(true);
     setTimeout(() => {
       setCurrentQ(next);
-      setAnswered(null);
-      setAnimClass("animate-slide-up");
-      setTimeout(() => setAnimClass(""), 400);
+      resetQuestion();
+      setTimeLeft(timerSeconds);
       setInTransition(false);
       inTransitionRef.current = false;
+      questionStart.current = Date.now();
     }, TRANSITION_MS);
   }
 
-  useEffect(() => {
-    if (phase !== "playing" || timerSeconds === 0) return;
-    setTimeLeft(timerSeconds);
-    const interval = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          setAnswers((prev) => {
-            if (prev[currentQ] !== null) return prev;
-            const next = [...prev];
-            next[currentQ] = { selected: -1, correct: false };
-            return next;
-          });
-          setStreak(0);
-          advanceQ(questions, currentQ);
-          return timerSeconds;
-        }
-        return t - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, currentQ, timerSeconds]);
-
-  function selectAnswer(i: number) {
-    if (answered !== null) return;
-    setAnswered(i);
-    const correct = i === questions[currentQ].answer;
+  /** Record "no answer" for a question unless it already has one. */
+  function recordNoAnswer(qIndex: number) {
     setAnswers((prev) => {
+      if (prev[qIndex] !== null) return prev;
       const next = [...prev];
-      next[currentQ] = { selected: i, correct };
+      next[qIndex] = { selected: -1, correct: false, points: 0 };
       return next;
     });
-    if (correct) {
-      setStreak((s) => {
-        const ns = s + 1;
-        setBestStreak((b) => Math.max(b, ns));
-        return ns;
-      });
-      // Speed bonus: faster answer = more points (only when timer > 0)
-      if (timerSeconds > 0) {
-        const fraction = timeLeft / timerSeconds;
-        const bonus = Math.round(fraction * 5);
-        setSpeedBonusAccum((s) => s + bonus);
-      }
-    } else {
-      setStreak(0);
-    }
-    setAnimClass(correct ? "animate-pop" : "animate-shake");
-    setTimeout(() => setAnimClass(""), 500);
   }
 
-  function handleSkip() {
+  /** Skipped or out of time: show the answer anyway, then wait for "Next". */
+  function endWithoutAnswer(reason: "skip" | "timeout") {
+    recordNoAnswer(currentQ);
+    setLostStreak(streak);
+    setStreak(0);
+    setMissRun((m) => m + 1);
+    setNoAnswer(reason);
+    setAnswered(-1);
+    if (reason === "timeout") {
+      play("wrong");
+      buzz([40, 30, 40]);
+      pulseDots({ tone: "bad", strength: 0.8 });
+    } else {
+      play("tap");
+    }
+  }
+
+  // Countdown for the current question. It stops as soon as the player
+  // answers or skips, so a slow "Next" click (or the transition after it) can
+  // never time out a question that was already answered and reset the streak.
+  useEffect(() => {
+    if (phase !== "playing" || timerSeconds === 0 || answered !== null || inTransition) return;
+    // timeLeft was already reset to the full timer when this question started.
+    const deadline = Date.now() + timerSeconds * 1000;
+    lastTick.current = timerSeconds;
+    const interval = setInterval(() => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setTimeLeft(left);
+      if (left !== lastTick.current && left > 0 && left <= 5) play("tick");
+      lastTick.current = left;
+      if (left === 0) {
+        clearInterval(interval);
+        endWithoutAnswer("timeout");
+      }
+    }, 250);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, currentQ, timerSeconds, answered, inTransition]);
+
+  function selectAnswer(i: number, el?: HTMLElement | null) {
     if (answered !== null || inTransitionRef.current) return;
+    setAnswered(i);
+    const q = questions[currentQ];
+    const correct = i === q.answer;
+    const elapsed = (Date.now() - questionStart.current) / 1000;
+    let points = 0;
+    if (correct) {
+      points = soloPointsPerCorrect(questionDifficulty, difficulty);
+      const ns = streak + 1;
+      setStreak(ns);
+      setBestStreak((b) => Math.max(b, ns));
+      // Speed bonus: faster answer = more points (only when timer > 0)
+      if (timerSeconds > 0) {
+        const bonus = Math.round((timeLeft / timerSeconds) * 5);
+        points += bonus;
+        setSpeedBonusAccum((s) => s + bonus);
+      }
+      const secondsLeft = timerSeconds > 0 ? timerSeconds - elapsed : null;
+      const c = calloutFor({ streak: ns, elapsed, secondsLeft, missesBefore: missRun, timerSeconds });
+      setCallout(c);
+      setExtras((e) => ({
+        rightTimes: [...e.rightTimes, elapsed],
+        clutches: e.clutches + (c?.text === "Clutch!" ? 1 : 0),
+        comebacks: e.comebacks + (missRun >= 2 ? 1 : 0),
+      }));
+      setMissRun(0);
+      play("correct");
+      pulseFrom(el, { tone: "good", strength: 0.9 });
+      if (c) {
+        window.setTimeout(() => {
+          play(c.tone === "hl" ? "streak" : "stamp");
+          pulseFrom(el, { tone: "hl", strength: 0.7 });
+        }, STAMP_DELAY * 1000);
+      }
+    } else {
+      setLostStreak(streak);
+      setStreak(0);
+      setMissRun((m) => m + 1);
+      play("wrong");
+      buzz([40, 30, 40]);
+      pulseFrom(el, { tone: "bad", shake: true });
+    }
     setAnswers((prev) => {
       const next = [...prev];
-      next[currentQ] = { selected: -1, correct: false };
+      next[currentQ] = { selected: i, correct, points };
       return next;
     });
-    setStreak(0);
-    advanceQ(questions, currentQ);
   }
 
   function handleNext() {
-    if (answers[currentQ] === null) {
-      setAnswers((prev) => {
-        const next = [...prev];
-        next[currentQ] = { selected: -1, correct: false };
-        return next;
-      });
-    }
+    recordNoAnswer(currentQ);
     advanceQ(questions, currentQ);
   }
 
+  // Keyboard: 1–4 or A–D to answer, S to skip, Enter for the next question.
   useEffect(() => {
-    if (phase === "results" && questions.length > 0 && !statsSaved.current) {
+    if (phase !== "playing") return;
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || inTransitionRef.current) return;
+      if (e.target instanceof Element && e.target.closest("input, textarea")) return;
+      const k = e.key.toLowerCase();
+      const idx = "1234".indexOf(k) >= 0 ? "1234".indexOf(k) : "abcd".indexOf(k);
+      if (answered === null && idx >= 0 && idx < (questions[currentQ]?.options.length ?? 0)) {
+        e.preventDefault();
+        selectAnswer(idx, optionsRef.current?.children[idx] as HTMLElement | undefined);
+      } else if (answered === null && k === "s") {
+        endWithoutAnswer("skip");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, answered, currentQ, questions, streak, missRun, timeLeft]);
+
+  const correctCount = answers.filter((a) => a?.correct).length;
+  const pct = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0;
+
+  const verdict =
+    pct === 100 ? "Perfect!" : pct >= 80 ? "Brilliant!" : pct >= 60 ? "Nice work!" : pct >= 40 ? "Not bad!" : "Keep at it!";
+  const finalScore = calcSoloScore(correctCount, questionDifficulty, difficulty, speedBonusAccum);
+  const maxPoints = count * (soloPointsPerCorrect(questionDifficulty, difficulty) + (timerSeconds > 0 ? 5 : 0));
+  const lowerTags = tags.map((t) => t.toLowerCase());
+  const best = history
+    .filter((g) => g.topics.some((t) => lowerTags.includes(t.toLowerCase())))
+    .reduce((m, g) => Math.max(m, g.score), 0) || null;
+
+  const stamps = earnedStamps({
+    correct: correctCount,
+    total: questions.length,
+    bestStreak,
+    answered: answers.filter((a) => a && a.selected !== -1).length,
+    rightTimes: extras.rightTimes,
+    timerSeconds,
+    clutches: extras.clutches,
+    comebacks: extras.comebacks,
+    questionDifficulty,
+  });
+
+  useEffect(() => {
+    if (phase !== "results" || questions.length === 0) return;
+    if (!statsSaved.current) {
       statsSaved.current = true;
-      const correct = answers.filter((a) => a?.correct).length;
       saveSoloGame({
         topics: tags,
-        correct,
+        correct: correctCount,
         total: questions.length,
         questionDifficulty,
         timerDifficulty: difficulty,
@@ -291,530 +459,421 @@ export default function SoloPage() {
       // can prompt them to register after the limit.
       if (!isLoggedIn()) incrementGuestGamesPlayed();
     }
+    // The paper gets marked: a cheer for a good score, then a thud per stamp.
+    const timers = [
+      window.setTimeout(() => {
+        if (pct >= 80) { play("fanfare"); pulseDots({ tone: "hl", strength: 1.4 }); }
+        else if (pct >= 50) play("streak");
+      }, 900),
+      ...stamps.map((_, i) =>
+        window.setTimeout(() => play("stamp"), 1500 + i * 260)),
+    ];
+    return () => timers.forEach((t) => window.clearTimeout(t));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  const correctCount = answers.filter((a) => a?.correct).length;
-  const pct = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0;
-  const stars = pct >= 80 ? 3 : pct >= 60 ? 2 : pct >= 40 ? 1 : 0;
-  const messages = ["Keep going!", "Good effort!", "Nice work!", "Brilliant!"];
-  const finalScore = correctCount * 10 * qDiffMultiplier(questionDifficulty)
-    + correctCount * (difficulty === "none" ? 0 : difficulty === "easy" ? 2 : difficulty === "medium" ? 4 : 8)
-    + speedBonusAccum;
 
   const q = questions[currentQ];
 
-  // ── SETUP PHASE ─────────────────────────────────────────────────────────
+  // ── SETUP ───────────────────────────────────────────────────────────────
   if (phase === "setup") {
     return (
       <PageShell title="Lone Wolf" showBack>
-        <div className="flex-1 flex items-start justify-center px-4 sm:px-6 py-8 sm:py-10">
-          <motion.div
-            variants={stagger(0.07)}
-            initial="hidden"
-            animate="show"
-            className="w-full max-w-lg space-y-5"
-          >
+        <motion.div
+          variants={stagger(0.06)}
+          initial="hidden"
+          animate="show"
+          className="w-full max-w-xl lg:max-w-5xl mx-auto px-4 sm:px-6 pt-8 sm:pt-12 lg:pb-16"
+        >
+          <motion.h1 variants={fadeUp} className="font-heading text-4xl sm:text-5xl text-ink leading-none">
+            Set up your quiz
+          </motion.h1>
+          <motion.p variants={fadeUp} className="mt-2 font-hand text-2xl text-ink-muted">
+            just you and the clock
+          </motion.p>
 
-            <motion.div variants={fadeUp} className="sketch-card p-6">
-              <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-3">
-                <BookOpen size={14} /> Topics
-              </label>
-              <div
-                className="flex flex-wrap gap-2 p-3 sketch-inset min-h-[52px] focus-within:border-ink cursor-text"
-                onClick={() => document.getElementById("tag-input")?.focus()}
-              >
-                <AnimatePresence>
-                  {tags.map((tag, i) => (
-                    <motion.span
-                      key={tag}
-                      layout
-                      initial={{ opacity: 0, scale: 0.6 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.6 }}
-                      transition={{ type: "spring", stiffness: 380, damping: 22 }}
-                      className="flex items-center gap-1 bg-ink text-on-ink text-sm px-3 py-1 rounded-full font-bold"
-                    >
-                      {tag}
-                      <button
-                        onClick={() => setTags((p) => p.filter((_, j) => j !== i))}
-                        className="ml-1 opacity-60 hover:opacity-100"
-                        aria-label={`Remove ${tag}`}
-                      >
-                        <X size={11} />
-                      </button>
-                    </motion.span>
-                  ))}
-                </AnimatePresence>
-                <input
-                  id="tag-input"
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={handleTagKey}
-                  onBlur={() => tagInput.trim() && addTag(tagInput)}
-                  placeholder={tags.length === 0 ? "Type a topic, press Enter…" : "Add more…"}
-                  className="flex-1 min-w-[140px] bg-transparent outline-none text-sm text-ink placeholder-ink-ghost"
-                />
-              </div>
-              <p className="text-xs text-ink-faint mt-2 font-medium">e.g. History, Science, Movies, NBA…</p>
-            </motion.div>
-
-            <motion.div variants={fadeUp} className="sketch-card p-6">
-              <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-3">
-                <Hash size={14} /> Questions:
-                <span className="text-ink text-base ml-1">{count}</span>
-              </label>
-              <input
-                type="range" min={3} max={20} value={count}
-                onChange={(e) => setCount(+e.target.value)}
-                className="w-full"
+          <div className="mt-6 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-8 items-start">
+            <motion.div variants={fadeUp} className="sketch-card p-5 sm:p-7 space-y-7">
+              <TopicInput tags={tags} onChange={(t) => { setTags(t); setSetupError(""); }} />
+              <hr className="border-t-2 border-dashed border-line-soft" />
+              <CountSlider value={count} onChange={setCount} />
+              <ChoiceGrid
+                label="Question difficulty"
+                hint="Harder questions are worth more."
+                options={QUESTION_DIFFICULTY_CHOICES}
+                value={questionDifficulty}
+                onChange={setQuestionDifficulty}
               />
-              <div className="flex justify-between text-xs text-ink-faint mt-2 font-medium">
-                <span>3 (Quick)</span><span>20 (Marathon)</span>
-              </div>
+              <ChoiceGrid
+                label="Timer"
+                hint="Seconds per question. Shorter timers pay a bonus."
+                options={TIMER_CHOICES}
+                value={difficulty}
+                onChange={setDifficulty}
+              />
             </motion.div>
 
-            <motion.div variants={fadeUp} className="sketch-card p-6">
-              <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-1">
-                <Brain size={14} /> Question Difficulty
-              </label>
-              <p className="text-xs text-ink-faint mb-3 font-medium">How hard should the AI make the questions?</p>
-              <div className="grid grid-cols-2 gap-3">
-                {(Object.keys(QUESTION_DIFFICULTY_CONFIG) as QuestionDifficulty[]).map((d) => {
-                  const cfg = QUESTION_DIFFICULTY_CONFIG[d];
-                  const active = questionDifficulty === d;
-                  return (
-                    <motion.button
-                      key={d}
-                      whileTap={{ scale: 0.95 }}
-                      whileHover={{ y: -2 }}
-                      onClick={() => setQuestionDifficulty(d)}
-                      className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border-2 font-bold text-xs transition-colors duration-150 touch-manipulation focus-ring ${
-                        active
-                          ? `${cfg.activeClass} shadow-[2px_2px_0px_currentColor]`
-                          : "border-line-soft text-ink-muted bg-card hover:border-ink hover:text-ink"
-                      }`}
-                    >
-                      <QuestionDifficultyIcon d={d} />
-                      <span>{cfg.label}</span>
-                      <span className="text-[10px] opacity-70 text-center">{cfg.description}</span>
-                    </motion.button>
-                  );
-                })}
-              </div>
-            </motion.div>
+            <motion.aside variants={fadeUp} className="hidden lg:block sticky top-24">
+              <QuizTicket
+                tags={tags}
+                count={count}
+                questionDifficulty={questionDifficulty}
+                difficulty={difficulty}
+                maxPoints={maxPoints}
+                best={best}
+                error={setupError}
+                onStart={handleStart}
+              />
+            </motion.aside>
+          </div>
+        </motion.div>
 
-            <motion.div variants={fadeUp} className="sketch-card p-6">
-              <label className="flex items-center gap-2 text-xs font-black text-ink-soft uppercase tracking-widest mb-1">
-                <Timer size={14} /> Timer Difficulty
-              </label>
-              <p className="text-xs text-ink-faint mb-3 font-medium">How much time per question?</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {(Object.keys(DIFFICULTY_CONFIG) as Difficulty[]).map((d) => {
-                  const cfg = DIFFICULTY_CONFIG[d];
-                  const active = difficulty === d;
-                  return (
-                    <motion.button
-                      key={d}
-                      whileTap={{ scale: 0.95 }}
-                      whileHover={{ y: -2 }}
-                      onClick={() => setDifficulty(d)}
-                      className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border-2 font-bold text-xs transition-colors duration-150 touch-manipulation focus-ring ${
-                        active
-                          ? `${cfg.activeClass} shadow-[2px_2px_0_var(--shadow)]`
-                          : "border-line-soft text-ink-muted bg-card hover:border-ink hover:text-ink"
-                      }`}
-                    >
-                      <TimerDifficultyIcon d={d} />
-                      <span>{cfg.label}</span>
-                      {cfg.seconds > 0 && <span className="text-[10px] opacity-70">{cfg.seconds}s</span>}
-                    </motion.button>
-                  );
-                })}
-              </div>
-            </motion.div>
-
-            <AnimatePresence>
-              {setupError && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ type: "spring", stiffness: 380, damping: 22 }}
-                  className="flex items-center gap-2 bg-red-50 dark:bg-red-950/40 border-2 border-red-500 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm font-semibold"
-                  style={{ boxShadow: "3px 3px 0px var(--shadow-soft)" }}
-                >
-                  <AlertTriangle size={15} className="shrink-0" />
-                  {setupError}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <motion.button
-              variants={fadeUp}
-              whileTap={{ scale: 0.97 }}
-              whileHover={{ y: -1 }}
-              onClick={handleStart}
-              className="w-full sketch-btn-dark gap-2 py-4 text-lg font-heading focus-ring"
-            >
-              Let&apos;s Go! <ArrowRight size={18} />
-            </motion.button>
-          </motion.div>
+        {/* Start: pinned to the bottom on phones so it's always in reach */}
+        <div className="lg:hidden sticky bottom-0 z-20 mt-6 border-t-2 border-ink sm:border-0 sm:static" style={{ background: "var(--paper)" }}>
+          <div className="w-full max-w-xl mx-auto px-4 sm:px-6 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-14 space-y-3">
+            <Notice>{setupError}</Notice>
+            <button onClick={handleStart} className="w-full sketch-btn-accent gap-2 h-14 text-lg focus-ring">
+              Start {count} questions <ArrowRight size={20} />
+            </button>
+            <p className="text-center text-sm font-bold text-ink-muted">
+              Worth up to {maxPoints} points
+            </p>
+          </div>
         </div>
       </PageShell>
     );
   }
 
-  // ── GENERATING PHASE ─────────────────────────────────────────────────────
+  // ── GENERATING ──────────────────────────────────────────────────────────
   if (phase === "generating") {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-6 p-6">
-        <motion.div
-          animate={{ y: [0, -8, 0] }}
-          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-          className="w-20 h-20 bg-ink rounded-2xl flex items-center justify-center"
-          style={{ boxShadow: "4px 4px 0px var(--shadow)" }}
-        >
-          <Bot size={40} className="text-on-ink" />
-        </motion.div>
-        <div className="text-center">
-          <h2 className="font-heading text-3xl text-ink mb-2">Cooking up questions…</h2>
-          <p className="text-ink-muted font-medium">
-            AI is generating {count} questions on: {tags.join(", ")}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {[0, 1, 2].map((i) => (
-            <motion.div
-              key={i}
-              animate={{ y: [0, -8, 0] }}
-              transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
-              className="w-3 h-3 bg-ink rounded-full"
-            />
-          ))}
-        </div>
-      </div>
-    );
+    return <GeneratingScreen tags={tags} count={count} questionDifficulty={questionDifficulty} />;
   }
 
-  // ── PLAYING PHASE ────────────────────────────────────────────────────────
+  // ── PLAYING ─────────────────────────────────────────────────────────────
   if (phase === "playing" && q) {
-    const progress = (currentQ / questions.length) * 100;
     const isAnswered = answered !== null;
     const isCorrect = isAnswered && answered === q.answer;
+    const last = currentQ + 1 >= questions.length;
+    const ticks: TickState[] = answers.map((a) =>
+      a === null ? null : a.selected === -1 ? "skip" : a.correct ? "good" : "bad");
+    const points = answers[currentQ]?.points ?? 0;
+    const seed = currentQ * 7 + gameSeed;
+
+    const stateFor = (i: number): OptionState => {
+      if (!isAnswered) return "idle";
+      if (i === answered) return i === q.answer ? "correct" : "wrong";
+      if (i === q.answer) return "missed";
+      return "dim";
+    };
+
+    const title = isCorrect
+      ? pick(RIGHT_HEADLINES, seed)
+      : noAnswer === "timeout" ? "Time's up"
+      : noAnswer === "skip" ? "Skipped"
+      : pick(WRONG_HEADLINES, seed);
 
     return (
-      <div className="min-h-screen flex flex-col bg-paper relative">
+      <div className="min-h-svh flex flex-col">
+        <header className="sticky top-0 z-20 border-b-2 border-ink bg-card">
+          <div className="max-w-2xl mx-auto h-16 px-4 sm:px-6 flex items-center gap-3">
+            <ProgressTicks total={questions.length} current={currentQ} results={ticks} />
+            <span className="text-sm font-extrabold text-ink tabular-nums whitespace-nowrap">
+              {currentQ + 1}<span className="text-ink-muted">/{questions.length}</span>
+            </span>
+            {streak >= 2 && (
+              <motion.span
+                key={streak}
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="flex items-center gap-1 rounded-full border-2 border-ink bg-hl px-2 py-0.5 text-sm font-extrabold text-hl-ink"
+                aria-label={`${streak} in a row`}
+              >
+                <Flame size={14} /> {streak}
+              </motion.span>
+            )}
+            <SoundToggle />
+            {timerSeconds > 0 && <TimerRing seconds={timeLeft} total={timerSeconds} size={46} />}
+          </div>
+        </header>
+
+        <main
+          className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 pt-8 sm:pt-12 pb-10"
+          style={isAnswered ? { paddingBottom: "calc(var(--feedback-h, 14rem) + 1.5rem)" } : undefined}
+        >
+          <QuestionSheet number={currentQ + 1} category={q.category} stamp={callout}>{q.question}</QuestionSheet>
+
+          <div ref={optionsRef} key={`opts-${currentQ}`} className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {q.options.map((opt, i) => {
+              const state = stateFor(i);
+              return (
+                <OptionButton
+                  key={i}
+                  index={i}
+                  text={opt}
+                  state={state}
+                  onPick={(el) => selectAnswer(i, el)}
+                  note={state === "correct" ? `+${points}` : state === "missed" ? "this one!" : undefined}
+                  remark={state === "wrong" ? q.option_notes?.[i] || undefined : undefined}
+                />
+              );
+            })}
+          </div>
+
+          {!isAnswered && (
+            <div className="mt-6 flex flex-col items-center gap-1">
+              <button
+                onClick={() => endWithoutAnswer("skip")}
+                className="flex items-center gap-1.5 rounded-lg px-4 h-11 text-sm font-extrabold text-ink-muted hover:text-ink transition-colors focus-ring"
+              >
+                <SkipForward size={16} /> Skip this one
+              </button>
+              <p className="hidden [@media(hover:hover)_and_(pointer:fine)]:block text-xs font-bold text-ink-faint">
+                Tip: press 1–4 to answer
+              </p>
+            </div>
+          )}
+        </main>
+
         <AnimatePresence>
-          {inTransition && (
-            <QuestionTransition nextNum={currentQ + 2} total={questions.length} />
+          {isAnswered && !inTransition && (
+            <FeedbackBar
+              key={`fb-${currentQ}`}
+              tone={isCorrect ? "good" : "bad"}
+              title={title}
+              aside={isCorrect
+                ? <>+{points} points{streak >= 2 && <> · {streak} in a row</>}</>
+                : undefined}
+              explanation={isCorrect ? undefined : q.explanation || `The answer was ${q.options[q.answer]}.`}
+              quip={(isCorrect ? q.quip_right : q.quip_wrong) || undefined}
+              fact={q.fact || undefined}
+              footer={!isCorrect && lostStreak >= 3 ? <>That ends a streak of {lostStreak}. It was a good run.</> : undefined}
+              action={
+                <button autoFocus onClick={handleNext} className="sketch-btn-accent gap-2 h-12 px-6 text-base w-full sm:w-auto shrink-0 focus-ring">
+                  {last ? <><Trophy size={18} /> See results</> : <>Next question <ArrowRight size={18} /></>}
+                </button>
+              }
+            />
           )}
         </AnimatePresence>
 
-        <div className="px-5 py-3 border-b-2 border-ink bg-card flex items-center gap-3">
-          <div className="flex-1 bg-card-soft h-3 overflow-hidden border border-ink">
+        <AnimatePresence>
+          {inTransition && (
             <motion.div
-              className="h-full bg-ink"
-              initial={false}
-              animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            />
-          </div>
-          <span className="text-sm font-black text-ink whitespace-nowrap tabular-nums">
-            {currentQ + 1} / {questions.length}
-          </span>
-          {streak >= 2 && (
-            <motion.span
-              key={streak}
-              initial={{ scale: 0.6, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="flex items-center gap-1 text-xs font-black text-amber-500"
+              key="transition"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-40 flex items-center justify-center"
+              style={{ background: "var(--paper)" }}
             >
-              <Flame size={13} /> {streak}
-            </motion.span>
+              <QuestionTransition nextNum={currentQ + 2} total={questions.length} />
+            </motion.div>
           )}
-        </div>
-
-        <div className="flex-1 flex flex-col items-center justify-center p-5 gap-6 max-w-2xl mx-auto w-full">
-          <div className="flex items-center justify-between w-full">
-            {q.category && (
-              <span
-                className="text-xs font-black bg-card border-2 border-ink text-ink px-4 py-1.5 rounded-full uppercase tracking-wider"
-                style={{ boxShadow: "2px 2px 0px var(--shadow)" }}
-              >
-                {q.category}
-              </span>
-            )}
-            {timerSeconds > 0 && (
-              <CircularTimer seconds={timeLeft} total={timerSeconds} />
-            )}
-          </div>
-
-          <motion.div
-            key={currentQ}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className={`text-center w-full sketch-card p-6 ${animClass}`}
-          >
-            <h2 className="font-body font-extrabold text-xl md:text-2xl text-ink leading-snug">
-              {q.question}
-            </h2>
-          </motion.div>
-
-          <motion.div
-            key={`opts-${currentQ}`}
-            variants={stagger(0.05)}
-            initial="hidden"
-            animate="show"
-            className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full"
-          >
-            {q.options.map((opt, i) => {
-              const sel = answered === i;
-              const correct = i === q.answer;
-              let cls = "bg-card border-ink text-ink hover:shadow-[3px_3px_0_var(--shadow)] hover:-translate-y-0.5";
-              if (isAnswered) {
-                if (sel && correct) cls = "bg-emerald-600 border-emerald-700 text-white shadow-[3px_3px_0px_#166534]";
-                else if (sel && !correct) cls = "bg-red-600 border-red-700 text-white shadow-[3px_3px_0px_#991b1b]";
-                else if (correct) cls = "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-800 dark:text-emerald-300";
-                else cls = "bg-card border-line-soft text-ink-faint opacity-50";
-              }
-              return (
-                <motion.button
-                  key={i}
-                  variants={scaleIn}
-                  whileTap={!isAnswered ? { scale: 0.97 } : {}}
-                  onClick={() => selectAnswer(i)}
-                  disabled={isAnswered}
-                  className={`flex items-center gap-3 p-4 rounded-xl border-2 font-bold text-sm text-left transition-all duration-150 disabled:cursor-not-allowed focus-ring ${cls} ${sel && !isCorrect ? "animate-shake" : ""} ${sel && isCorrect ? "animate-pop" : ""}`}
-                >
-                  <span className={`w-9 h-9 rounded-lg flex items-center justify-center font-black text-sm shrink-0 transition-colors ${
-                    isAnswered
-                      ? sel && correct ? "bg-white/20 text-white"
-                      : sel ? "bg-white/20 text-white"
-                      : correct ? "bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200"
-                      : "bg-card-soft text-ink-faint"
-                      : "bg-ink text-on-ink"
-                  }`}>
-                    {isAnswered && sel && correct
-                      ? <Check size={16} />
-                      : isAnswered && sel
-                      ? <X size={16} />
-                      : isAnswered && correct
-                      ? <Check size={16} />
-                      : OPTION_LABELS[i]}
-                  </span>
-                  <span className="flex-1 leading-snug">{opt}</span>
-                </motion.button>
-              );
-            })}
-          </motion.div>
-
-          <div className="flex items-center justify-between w-full gap-3">
-            {!isAnswered ? (
-              <button
-                onClick={handleSkip}
-                className="flex items-center gap-1.5 text-sm font-bold text-ink-muted hover:text-ink transition-colors px-3 py-2 focus-ring rounded-md"
-              >
-                <SkipForward size={15} /> Skip
-              </button>
-            ) : (
-              <div />
-            )}
-
-            <AnimatePresence>
-              {isAnswered && (
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ type: "spring", stiffness: 380, damping: 26 }}
-                  className="flex flex-col items-end gap-2"
-                >
-                  <p className={`font-heading text-xl font-bold ${isCorrect ? "text-emerald-600" : "text-red-600"}`}>
-                    {isCorrect ? "Correct!" : "Wrong!"}
-                  </p>
-                  {!isCorrect && (
-                    <p className="text-sm text-ink-soft font-medium">
-                      Correct: <span className="text-emerald-600 font-black">{q.options[q.answer]}</span>
-                    </p>
-                  )}
-                  <motion.button
-                    whileTap={{ scale: 0.97 }}
-                    whileHover={{ y: -1 }}
-                    onClick={handleNext}
-                    className="sketch-btn-dark gap-2 px-8 py-3 focus-ring"
-                  >
-                    {currentQ + 1 >= questions.length ? (
-                      <><Trophy size={16} /> See Results</>
-                    ) : (
-                      <>Next Question <ArrowRight size={15} /></>
-                    )}
-                  </motion.button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
+        </AnimatePresence>
       </div>
     );
   }
 
-  // ── RESULTS PHASE ────────────────────────────────────────────────────────
+  // ── RESULTS: the marked paper ───────────────────────────────────────────
+  // The title names one of your topics: the one you did best in.
+  const byTopic = new Map<string, { right: number; total: number }>(tags.map((t) => [t, { right: 0, total: 0 }]));
+  questions.forEach((question, i) => {
+    const category = question.category.toLowerCase();
+    const tag = tags.find((t) => category.includes(t.toLowerCase()) || t.toLowerCase().includes(category));
+    const row = tag ? byTopic.get(tag) : undefined;
+    if (!row) return;
+    row.total += 1;
+    if (answers[i]?.correct) row.right += 1;
+  });
+  const ratio = (r: { right: number; total: number }) => (r.total ? r.right / r.total : -1);
+  const bestTopic = [...byTopic.entries()]
+    .sort(([, a], [, b]) => ratio(b) - ratio(a) || b.total - a.total)[0]?.[0] ?? "Trivia";
+  const title = earnedTitle(pct, bestTopic);
+  const marks = answers.map((a): "good" | "bad" | "skip" => (a?.correct ? "good" : a && a.selected !== -1 ? "bad" : "skip"));
+  const comment = teacherComment(pct, gameSeed);
+  const shareCaption = [
+    `Qrio · ${tags.join(", ")} · ${QUESTION_DIFFICULTY_CONFIG[questionDifficulty].label}`,
+    `${resultGrid(marks)} ${correctCount}/${questions.length} · ${finalScore} pts`,
+    `Title earned: ${title}`,
+    typeof window !== "undefined" ? window.location.origin : "",
+  ].join("\n");
+
   return (
-    <div className="min-h-screen flex flex-col items-center p-5 pt-8">
+    <PageShell title="Lone Wolf">
+      {pct >= 80 && <Confetti />}
       <motion.div
         variants={stagger(0.08)}
         initial="hidden"
         animate="show"
-        className="w-full max-w-2xl space-y-5"
+        className="w-full max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6"
       >
-
-        <motion.div variants={scaleIn} className="sketch-card p-8 text-center">
-          <motion.div
-            initial={{ scale: 0, rotate: -180 }}
-            animate={{ scale: 1, rotate: 0 }}
-            transition={{ type: "spring", stiffness: 200, damping: 14, delay: 0.2 }}
-            className="flex justify-center mb-4"
-          >
-            {pct >= 80
-              ? <Trophy size={52} className="text-amber-500" />
-              : pct >= 60
-              ? <Star size={52} className="text-blue-500 fill-blue-500" />
-              : pct >= 40
-              ? <ThumbsUp size={52} className="text-emerald-500" />
-              : <BookOpen size={52} className="text-ink-muted" />}
-          </motion.div>
-          <h2 className="font-heading text-4xl text-ink mb-1">{messages[stars]}</h2>
-
-          <div className="flex justify-center gap-2 my-4">
-            {[0, 1, 2].map((i) => (
-              <motion.span
-                key={i}
-                initial={{ scale: 0, rotate: -180 }}
-                animate={{ scale: 1, rotate: 0 }}
-                transition={{ type: "spring", stiffness: 280, damping: 16, delay: 0.4 + i * 0.15 }}
+        <motion.section variants={fadeUp} className="relative sketch-card p-6 sm:p-10">
+          <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-10">
+            <div className="relative w-52 h-36 shrink-0 flex items-center justify-center">
+              <MarkerLoop stretch color="var(--bad-mark)" strokeWidth={3.5} duration={0.8} delay={0.35} className="-inset-1 w-[calc(100%+0.5rem)] h-[calc(100%+0.5rem)]" />
+              <span className="font-heading text-7xl text-ink leading-none tabular-nums">
+                {correctCount}<span className="text-4xl text-ink-muted">/{questions.length}</span>
+              </span>
+            </div>
+            <div className="text-center sm:text-left min-w-0">
+              <motion.p
+                initial={{ opacity: 0, rotate: -8, y: 6 }}
+                animate={{ opacity: 1, rotate: -4, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.9, ease: EASE }}
+                className="font-hand text-4xl sm:text-5xl text-bad leading-none"
               >
-                <Star
-                  size={36}
-                  className={i < stars ? "text-amber-400 fill-amber-400" : "text-ink-ghost fill-[var(--line-soft)]"}
-                />
-              </motion.span>
-            ))}
+                {verdict}
+              </motion.p>
+              <h1 className="mt-3 font-heading text-4xl sm:text-5xl text-ink tabular-nums leading-none">
+                {finalScore} <span className="text-2xl sm:text-3xl">points</span>
+              </h1>
+              <p className="mt-3 text-sm font-semibold text-ink-muted">
+                {tags.join(", ")} · {QUESTION_DIFFICULTY_CONFIG[questionDifficulty].label} · {DIFFICULTY_CONFIG[difficulty].seconds ? `${DIFFICULTY_CONFIG[difficulty].seconds}s timer` : "No timer"}
+              </p>
+            </div>
           </div>
 
-          <div className="flex justify-center gap-8 mt-4">
-            <div className="text-center">
-              <div className="font-heading text-5xl text-emerald-600">{correctCount}</div>
-              <div className="text-xs text-ink-faint uppercase tracking-wider mt-1 font-black">Correct</div>
-            </div>
-            <div className="text-center border-x-2 border-line-soft px-8">
-              <div className="font-heading text-5xl text-ink">{pct}%</div>
-              <div className="text-xs text-ink-faint uppercase tracking-wider mt-1 font-black">Score</div>
-            </div>
-            <div className="text-center">
-              <div className="font-heading text-5xl text-red-500">
-                {questions.length - correctCount}
+          <div className="mt-8 pt-6 border-t-2 border-dashed border-line-soft text-center">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-ink-muted">Title earned</p>
+            <p className="mt-2 inline-block font-heading text-[clamp(1.75rem,7vw,2.5rem)] leading-none text-ink text-balance">
+              {title}
+              <Scribble delay={1.1} className="mt-1 h-3 w-full" />
+            </p>
+          </div>
+
+          <dl className="mt-7 pt-6 border-t-2 border-dashed border-line-soft grid grid-cols-3 gap-2 text-center">
+            {[
+              { k: "Accuracy", v: `${pct}%` },
+              { k: "Best streak", v: bestStreak },
+              { k: "Speed bonus", v: `+${speedBonusAccum}` },
+            ].map((s) => (
+              <div key={s.k}>
+                <dd className="font-heading text-3xl sm:text-4xl text-ink tabular-nums">{s.v}</dd>
+                <dt className="mt-1 text-xs sm:text-sm font-bold text-ink-muted">{s.k}</dt>
               </div>
-              <div className="text-xs text-ink-faint uppercase tracking-wider mt-1 font-black">Wrong</div>
-            </div>
-          </div>
+            ))}
+          </dl>
 
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-            className="mt-5 inline-flex items-center gap-2 bg-ink text-on-ink px-4 py-2 rounded-full font-black text-sm"
+          <motion.p
+            initial={{ clipPath: "inset(0 100% 0 0)" }}
+            animate={{ clipPath: "inset(0 0% 0 0)" }}
+            transition={{ duration: 0.9, delay: 1.3, ease: EASE }}
+            className="mt-7 font-hand text-2xl sm:text-[28px] leading-tight text-bad text-center sm:text-right -rotate-1 text-pretty"
           >
-            <Trophy size={14} /> {Math.round(finalScore)} pts
-            {bestStreak >= 2 && <span className="opacity-80">· {bestStreak}× streak</span>}
-          </motion.div>
+            {comment}
+          </motion.p>
+        </motion.section>
 
-          <p className="text-ink-faint text-sm mt-4 font-medium">
-            Topics: {tags.join(", ")} · {QUESTION_DIFFICULTY_CONFIG[questionDifficulty].label} questions · {DIFFICULTY_CONFIG[difficulty].label} timer
-          </p>
-        </motion.div>
+        <motion.section variants={fadeUp} className="sketch-card p-5 sm:p-6">
+          <h2 className="font-heading text-xl text-ink">Stamps earned</h2>
+          {stamps.length > 0 ? (
+            <div className="mt-5 mb-1 flex flex-wrap gap-x-4 gap-y-5">
+              {stamps.map((id, i) => (
+                <Stamp
+                  key={id}
+                  text={STAMPS[id]}
+                  tone={id === "perfect" || id === "streak" ? "hl" : "good"}
+                  delay={1.5 + i * 0.26}
+                  className={i % 2 ? "rotate-3" : ""}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm font-semibold text-ink-muted">
+              None this time. Streaks, quick answers and perfect papers earn them.
+            </p>
+          )}
+        </motion.section>
 
-        <motion.div variants={fadeUp} className="sketch-card overflow-hidden">
-          <div className="px-6 py-4 border-b-2 border-ink">
-            <h3 className="font-black text-ink">Question Breakdown</h3>
-          </div>
-          <div className="divide-y-2 divide-line-faint">
+        <motion.section variants={fadeUp} className="sketch-card overflow-clip">
+          <h2 className="px-5 sm:px-6 py-4 border-b-2 border-ink font-heading text-xl text-ink">Your answers</h2>
+          <ol className="divide-y-2 divide-line-faint">
             {questions.map((question, i) => {
               const a = answers[i];
               const correct = a?.correct ?? false;
-              const timedOut = a?.selected === -1;
+              const skipped = !a || a.selected === -1;
               return (
-                <details key={i} className="group">
-                  <summary className="flex items-center gap-3 px-6 py-4 hover:bg-card-soft transition-colors cursor-pointer">
-                    <span className={`shrink-0 ${correct ? "text-emerald-600" : "text-red-500"}`}>
-                      {correct ? <Check size={18} /> : <X size={18} />}
-                    </span>
-                    <span className="flex-1 text-sm font-bold text-ink line-clamp-1">
-                      Q{i + 1}: {question.question}
-                    </span>
-                    <span className={`text-xs font-black px-2 py-1 rounded-full shrink-0 ${correct ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300" : "bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-300"}`}>
-                      {correct ? "+10" : "0"}
-                    </span>
-                    <ChevronDown size={14} className="chevron text-ink-faint ml-1 shrink-0 transition-transform group-open:rotate-180" />
-                  </summary>
-                  <div className="px-6 pb-4 pt-1 bg-card-soft text-sm space-y-2 border-t border-line-faint">
-                    {timedOut ? (
-                      <p className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1.5">
-                        <Timer size={14} /> Timed out — no answer submitted
-                      </p>
-                    ) : a ? (
-                      <>
-                        <p className={`font-semibold flex items-center gap-1.5 ${a.correct ? "text-emerald-600" : "text-red-600"}`}>
-                          {a.correct ? <Check size={14} /> : <X size={14} />}
-                          Your answer: {question.options[a.selected]}
+                <li key={i}>
+                  <details className="group">
+                    <summary className="flex items-center gap-3 px-5 sm:px-6 py-4 hover:bg-card-soft transition-colors">
+                      <span className={`w-8 h-8 shrink-0 rounded-full border-2 flex items-center justify-center ${correct ? "border-good text-good" : skipped ? "border-line-soft text-ink-faint" : "border-bad text-bad"}`}>
+                        {correct ? <Check size={16} strokeWidth={3} /> : <X size={16} strokeWidth={3} />}
+                      </span>
+                      <span className="flex-1 min-w-0 text-sm sm:text-base font-bold text-ink line-clamp-2">
+                        {question.question}
+                      </span>
+                      <span className={`shrink-0 font-hand text-2xl leading-none ${correct ? "text-good" : "text-ink-faint"}`}>
+                        {correct ? `+${a?.points ?? 0}` : "0"}
+                      </span>
+                      <ChevronDown size={16} className="chevron text-ink-muted shrink-0" />
+                    </summary>
+                    <div className="px-5 sm:px-6 pb-4 pl-16 sm:pl-[4.25rem] space-y-1.5 text-sm font-semibold">
+                      {skipped ? (
+                        <p className="text-ink-muted">Skipped or out of time</p>
+                      ) : !correct ? (
+                        <p className="text-ink-soft">You said <span className="strike-mark text-ink">{question.options[a.selected]}</span></p>
+                      ) : null}
+                      <p className="text-ink-soft">Answer: <span className="font-extrabold text-good">{question.options[question.answer]}</span></p>
+                      {question.fact && (
+                        <p className="flex gap-1.5 pt-1 text-ink-muted">
+                          <Lightbulb size={14} className="shrink-0 mt-0.5" aria-hidden="true" /> {question.fact}
                         </p>
-                        {!a.correct && (
-                          <p className="text-emerald-600 font-semibold flex items-center gap-1.5">
-                            <Check size={14} />
-                            Correct: {question.options[question.answer]}
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-ink-faint">Not answered</p>
-                    )}
-                  </div>
-                </details>
+                      )}
+                    </div>
+                  </details>
+                </li>
               );
             })}
-          </div>
-        </motion.div>
+          </ol>
+        </motion.section>
 
-        <motion.div variants={fadeUp} className="flex gap-3">
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ y: -1 }}
+        <motion.div variants={fadeUp} className="grid grid-cols-1 sm:grid-cols-3 gap-3 pb-4">
+          <button
             onClick={() => {
               statsSaved.current = false;
               setPhase("setup");
               setQuestions([]);
               setAnswers([]);
               setCurrentQ(0);
-              setAnswered(null);
+              resetQuestion();
               setStreak(0);
               setBestStreak(0);
               setSpeedBonusAccum(0);
+              setHistory(getStats().recentGames.filter((g) => g.type === "solo"));
             }}
-            className="flex-1 sketch-btn-dark gap-2 py-3.5 focus-ring"
+            className="sketch-btn-accent gap-2 h-14 text-base focus-ring"
           >
-            <RotateCcw size={15} /> Play Again
-          </motion.button>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            whileHover={{ y: -1 }}
-            onClick={() => router.push(getHomePath())}
-            className="flex-1 sketch-btn-light gap-2 py-3.5 focus-ring"
-          >
-            <Home size={15} /> Home
-          </motion.button>
+            <RotateCcw size={18} /> Play again
+          </button>
+          <button onClick={() => setShareOpen(true)} className="sketch-btn-light gap-2 h-14 text-base focus-ring">
+            <Share2 size={18} /> Share result
+          </button>
+          <button onClick={() => router.push(getHomePath())} className="sketch-btn-light gap-2 h-14 text-base focus-ring">
+            <Home size={18} /> Home
+          </button>
         </motion.div>
       </motion.div>
-    </div>
+
+      <ShareDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        text={shareCaption}
+        card={{
+          mode: "Lone Wolf",
+          topics: tags,
+          difficulty: QUESTION_DIFFICULTY_CONFIG[questionDifficulty].label,
+          correct: correctCount,
+          total: questions.length,
+          score: finalScore,
+          verdict,
+          title,
+          titleLabel: "Title earned",
+          grid: marks,
+          comment,
+          stamps: stamps.map((id) => STAMPS[id]),
+        }}
+      />
+    </PageShell>
   );
 }

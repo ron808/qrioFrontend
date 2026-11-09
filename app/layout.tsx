@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Nunito, Caveat, Permanent_Marker } from "next/font/google";
 import { ThemeProvider, themeBootScript } from "@/lib/theme";
+import DotField from "./components/DotField";
+import PageTransition from "./components/PageTransition";
 import "./globals.css";
 
 const nunito = Nunito({
@@ -23,8 +25,8 @@ const permanentMarker = Permanent_Marker({
 });
 
 export const metadata: Metadata = {
-  title: "Qrio — Quiz Together",
-  description: "AI-powered multiplayer quiz game. Pick any topic, challenge friends, learn together.",
+  title: "Qrio — Quiz yourself on anything",
+  description: "Type any topic and get fresh AI-written quiz questions. Play solo against the clock or race your friends in a live room.",
   applicationName: "Qrio",
   appleWebApp: {
     capable: true,
@@ -38,8 +40,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 5,
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#edecea" },
-    { media: "(prefers-color-scheme: dark)",  color: "#131316" },
+    { media: "(prefers-color-scheme: light)", color: "#f1eee6" },
+    { media: "(prefers-color-scheme: dark)",  color: "#000000" },
   ],
 };
 
@@ -55,7 +57,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
       </head>
       <body className="min-h-screen bg-paper text-ink antialiased font-body">
+        <DotField />
         <ThemeProvider>{children}</ThemeProvider>
+        <PageTransition />
       </body>
     </html>
   );

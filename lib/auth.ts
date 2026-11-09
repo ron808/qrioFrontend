@@ -38,10 +38,6 @@ export function getGuestName(): string | null {
   return sessionStorage.getItem("qrio_guest") || null;
 }
 
-export function clearGuest() {
-  sessionStorage.removeItem("qrio_guest");
-}
-
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
 /** Returns the display username for whichever session type is active. */
@@ -80,11 +76,6 @@ export function incrementGuestGamesPlayed(): number {
   const next = getGuestGamesPlayed() + 1;
   try { localStorage.setItem(GUEST_GAMES_KEY, String(next)); } catch { /* ignore */ }
   return next;
-}
-
-export function resetGuestGamesPlayed() {
-  if (typeof window === "undefined") return;
-  try { localStorage.removeItem(GUEST_GAMES_KEY); } catch { /* ignore */ }
 }
 
 /** True iff the visitor is a guest who has hit the free-trial cap. */

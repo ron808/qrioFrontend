@@ -5,13 +5,35 @@ export interface User {
   created_at: string;
 }
 
-export interface Question {
+/**
+ * How a question gets marked once it's answered, like a teacher scribbling in
+ * the margin. Any field can be "" (older or partial data); the UI skips those.
+ */
+export interface Commentary {
+  /** One sentence stating the right answer in context. */
+  explanation: string;
+  /** A related fact worth knowing. */
+  fact: string;
+  quip_right: string;
+  quip_wrong: string;
+  /** One note per option, in option order; "" for the right one. */
+  option_notes: string[];
+}
+
+export interface Question extends Partial<Commentary> {
   id: number;
   question: string;
   options: string[];
   answer: number;
   category: string;
 }
+
+/**
+ * A question as multiplayer clients see it while it's being played. The
+ * server holds back `answer` and the commentary until the question closes so
+ * nobody can read them out of devtools.
+ */
+export type RoomQuestion = Omit<Question, "answer"> & { answer?: number };
 
 // ── Time difficulty (timer per question) ────────────────────────────────────
 export type Difficulty = "none" | "easy" | "medium" | "hard";
@@ -21,22 +43,22 @@ export type QuestionDifficulty = "easy" | "medium" | "hard" | "spartan";
 
 export const QUESTION_DIFFICULTY_CONFIG: Record<
   QuestionDifficulty,
-  { label: string; description: string; activeClass: string }
+  { label: string; description: string }
 > = {
-  easy:    { label: "Easy",    description: "Beginner friendly",     activeClass: "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300" },
-  medium:  { label: "Medium",  description: "Some knowledge needed", activeClass: "border-blue-600    bg-blue-50    text-blue-800    dark:bg-blue-950/40    dark:text-blue-300" },
-  hard:    { label: "Hard",    description: "Expert level",          activeClass: "border-red-600     bg-red-50     text-red-800     dark:bg-red-950/40     dark:text-red-300" },
-  spartan: { label: "Spartan", description: "Brutal — world-class",  activeClass: "border-purple-700  bg-purple-50  text-purple-800  dark:bg-purple-950/40  dark:text-purple-300" },
+  easy:    { label: "Easy",    description: "Beginner friendly" },
+  medium:  { label: "Medium",  description: "Some knowledge needed" },
+  hard:    { label: "Hard",    description: "Expert level" },
+  spartan: { label: "Spartan", description: "Brutal — world-class" },
 };
 
 export const DIFFICULTY_CONFIG: Record<
   Difficulty,
-  { label: string; seconds: number; activeClass: string }
+  { label: string; seconds: number }
 > = {
-  none:   { label: "No Timer", seconds: 0,  activeClass: "border-[#1a1a1a] bg-[#1a1a1a] text-white" },
-  easy:   { label: "Easy",     seconds: 30, activeClass: "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300" },
-  medium: { label: "Medium",   seconds: 15, activeClass: "border-amber-600   bg-amber-50   text-amber-800   dark:bg-amber-950/40   dark:text-amber-300" },
-  hard:   { label: "Hard",     seconds: 8,  activeClass: "border-red-600     bg-red-50     text-red-800     dark:bg-red-950/40     dark:text-red-300" },
+  none:   { label: "No Timer", seconds: 0 },
+  easy:   { label: "Easy",     seconds: 30 },
+  medium: { label: "Medium",   seconds: 15 },
+  hard:   { label: "Hard",     seconds: 8 },
 };
 
 export const MULTI_DIFFICULTIES = ["easy", "medium", "hard"] as const;
@@ -46,6 +68,8 @@ export type GamePhase = "connecting" | "lobby" | "playing" | "results" | "error"
 export interface AnswerRecord {
   selected: number; // -1 = timed out / skipped
   correct: boolean;
+  /** Points this answer earned (solo only). */
+  points?: number;
 }
 
 export interface PlayerScores {
@@ -69,12 +93,15 @@ export interface WSPlayerJoined {
 
 export interface WSPlayerLeft { type: "player_left"; username: string; player_count: number }
 
-/** Sent to a new joiner with the full list of already-connected players + votes (legacy) */
-export interface WSPlayerList {
-  type: "player_list";
-  players: string[];
-  votes: Record<string, number>;
+export interface LeaderboardEntry {
+  username: string;
+  score: number;
+  correct_count: number;
+  rank: number;
 }
+
+/** Who got each question right: question index → username → correct. */
+export type AnswerBreakdown = Record<number, Record<string, boolean>>;
 
 /**
  * Authoritative room snapshot. Server sends this to every client when they
@@ -99,7 +126,19 @@ export interface WSRoomState {
   current_question: number;
   question_difficulty: QuestionDifficulty;
   tags: string[];
-  questions?: Question[]; // only when phase is "playing" or "post_game"
+  /** Present while playing (answers withheld) and after the game (answers included). */
+  questions?: RoomQuestion[];
+  /** Milliseconds left on the current question, while playing. */
+  time_left_ms?: number;
+  /** This player's answer to the current question, if they already gave one. */
+  my_current_answer?: { selected: number; is_correct: boolean; correct_index: number; reveal?: Commentary } | null;
+  /** Set while the current question is closed and its marking is on screen. */
+  closed_question?: { correct_index: number; reveal?: Commentary } | null;
+  /** After the game: the final standings and per-question breakdown. */
+  leaderboard?: LeaderboardEntry[];
+  answers?: AnswerBreakdown;
+  /** Secret that lets this browser reclaim its seat after a disconnect. */
+  rejoin_token: string;
 }
 
 export interface WSPlayerAnswered {
@@ -109,6 +148,24 @@ export interface WSPlayerAnswered {
   new_score: number;
   correct_count: number;
   question_index: number;
+}
+
+/** Sent only to the player who answered, revealing the right option. */
+export interface WSAnswerResult {
+  type: "answer_result";
+  question_index: number;
+  selected: number;
+  is_correct: boolean;
+  correct_index: number;
+  reveal?: Commentary;
+}
+
+/** The question stopped taking answers (everyone answered, or time ran out). */
+export interface WSQuestionClosed {
+  type: "question_closed";
+  question_index: number;
+  correct_index: number;
+  reveal?: Commentary;
 }
 
 export interface WSPlayerSkipped {
@@ -121,49 +178,60 @@ export interface WSPlayerSkipped {
 
 export interface WSStartGame {
   type: "start_game";
-  questions: Question[];
+  questions: RoomQuestion[];
   timer_seconds: number;
+  scores: PlayerScores;
+  correct_counts: PlayerCounts;
 }
 
+/** The server closed question `question_index`; clients move to the next one. */
 export interface WSNextQuestion {
   type: "next_question";
   question_index: number;
+  correct_index: number;
 }
 
 export interface WSVoteDifficulty { type: "vote_difficulty"; username: string; seconds: number }
 
-export interface LeaderboardEntry {
-  username: string;
-  score: number;
-  correct_count: number;
-  rank: number;
-}
+export interface WSHostChanged { type: "host_changed"; host_username: string }
 
 export interface WSGameFinished {
   type: "game_finished";
   leaderboard: LeaderboardEntry[];
   total_questions: number;
   question_difficulty: QuestionDifficulty;
+  tags: string[];
+  questions: Question[];
+  answers: AnswerBreakdown;
 }
 
 export interface WSNewGameReady {
   type: "new_game_ready";
-  questions: Question[];
+  questions: RoomQuestion[];
   tags: string[];
   question_difficulty: QuestionDifficulty;
   timer_seconds: number;
 }
 
+export interface WSError {
+  type: "error";
+  message: string;
+  /** Which request failed, e.g. "new_game". */
+  context?: string;
+}
+
 export type WSMessage =
   | WSPlayerJoined
   | WSPlayerLeft
-  | WSPlayerList
   | WSRoomState
   | WSPlayerAnswered
+  | WSAnswerResult
+  | WSQuestionClosed
   | WSPlayerSkipped
   | WSStartGame
   | WSNextQuestion
   | WSVoteDifficulty
+  | WSHostChanged
   | WSGameFinished
   | WSNewGameReady
-  | { type: string; [key: string]: unknown };
+  | WSError;

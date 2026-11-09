@@ -1,15 +1,56 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { useRouter } from "@/lib/navigation";
+import { motion } from "framer-motion";
 import { api } from "@/lib/api";
-import { getUser, isLoggedIn } from "@/lib/auth";
-import { fadeUp, scaleIn, stagger } from "@/lib/motion";
+import { getUser, isLoggedIn, saveAuth } from "@/lib/auth";
+import { fadeUp, stagger } from "@/lib/motion";
 import PageShell from "../components/PageShell";
-import {
-  KeyRound, Eye, EyeOff, AlertTriangle, Check, User as UserIcon, Mail, AtSign,
-} from "lucide-react";
+import Notice from "../components/Notice";
+import { Avatar } from "../components/Navbar";
+import { Eye, EyeOff, KeyRound, Loader2 } from "lucide-react";
+
+function PasswordField({
+  id, label, value, onChange, show, onToggle, autoComplete, placeholder,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  show?: boolean;
+  onToggle?: () => void;
+  autoComplete: string;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="field-label mb-1.5">{label}</label>
+      <div className="relative">
+        <input
+          id={id}
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          required
+          autoComplete={autoComplete}
+          placeholder={placeholder}
+          className={`w-full sketch-inset pl-4 ${onToggle ? "pr-12" : "pr-4"} h-12 text-base text-ink placeholder-ink-ghost`}
+        />
+        {onToggle && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-10 h-10 inline-flex items-center justify-center rounded-lg text-ink-muted hover:text-ink transition-colors focus-ring"
+            aria-label={show ? "Hide password" : "Show password"}
+          >
+            {show ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function AccountPage() {
   const router = useRouter();
@@ -32,12 +73,13 @@ export default function AccountPage() {
     e.preventDefault();
     setErr("");
     setSuccess(false);
-    if (newPw.length < 8) { setErr("New password must be at least 8 characters"); return; }
-    if (newPw !== confirm) { setErr("Passwords don't match"); return; }
-    if (newPw === oldPw) { setErr("New password must differ from current password"); return; }
+    if (newPw.length < 8) { setErr("The new password needs at least 8 characters."); return; }
+    if (newPw !== confirm) { setErr("Those passwords don't match."); return; }
+    if (newPw === oldPw) { setErr("Pick a password that\u2019s different from the current one."); return; }
     setBusy(true);
     try {
-      await api.changePassword(oldPw, newPw);
+      const res = await api.changePassword(oldPw, newPw);
+      if (user) saveAuth(res.token, user);
       setSuccess(true);
       setOldPw(""); setNewPw(""); setConfirm("");
     } catch (e) {
@@ -49,157 +91,44 @@ export default function AccountPage() {
 
   return (
     <PageShell title="Account" showBack>
-      <div className="flex-1 flex items-start justify-center px-4 sm:px-6 py-8 sm:py-10">
-        <motion.div
-          variants={stagger(0.08)}
-          initial="hidden"
-          animate="show"
-          className="w-full max-w-lg space-y-5"
-        >
+      <motion.div
+        variants={stagger(0.08)}
+        initial="hidden"
+        animate="show"
+        className="w-full max-w-xl mx-auto px-4 sm:px-6 pt-8 sm:pt-12 pb-14 space-y-6"
+      >
+        <motion.section variants={fadeUp} className="sketch-card p-5 sm:p-7 flex items-center gap-4">
+          <Avatar name={user?.username ?? "?"} size={56} />
+          <div className="min-w-0">
+            <h1 className="font-heading text-3xl text-ink truncate leading-tight">{user?.username}</h1>
+            <p className="text-sm font-bold text-ink-muted truncate">{user?.email}</p>
+          </div>
+        </motion.section>
 
-          <motion.div variants={scaleIn} className="sketch-card p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 bg-ink rounded-xl flex items-center justify-center shrink-0">
-                <UserIcon size={22} className="text-on-ink" />
-              </div>
-              <div>
-                <h2 className="font-heading text-2xl text-ink">{user?.username}</h2>
-                <p className="text-ink-muted text-xs font-medium">Your profile</p>
-              </div>
-            </div>
-            <div className="space-y-2 text-sm">
-              <div className="flex items-center gap-2 text-ink-soft">
-                <Mail size={14} className="text-ink-faint" />
-                <span className="font-bold">Email:</span>
-                <span className="font-medium">{user?.email}</span>
-              </div>
-              <div className="flex items-center gap-2 text-ink-soft">
-                <AtSign size={14} className="text-ink-faint" />
-                <span className="font-bold">Username:</span>
-                <span className="font-medium">{user?.username}</span>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div variants={fadeUp} className="sketch-card p-6">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 bg-ink rounded-xl flex items-center justify-center shrink-0">
-                <KeyRound size={18} className="text-on-ink" />
-              </div>
-              <div>
-                <h3 className="font-heading text-xl text-ink">Change password</h3>
-                <p className="text-ink-muted text-xs font-medium">Pick something strong</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-black text-ink-soft uppercase tracking-widest mb-1.5">
-                  Current password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showOld ? "text" : "password"}
-                    value={oldPw}
-                    onChange={(e) => setOldPw(e.target.value)}
-                    required
-                    autoComplete="current-password"
-                    placeholder="••••••••"
-                    className="w-full sketch-inset px-4 py-3 pr-12 text-ink placeholder-ink-ghost text-sm focus-ring"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowOld((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink p-1.5 focus-ring rounded-md"
-                    aria-label={showOld ? "Hide password" : "Show password"}
-                  >
-                    {showOld ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-black text-ink-soft uppercase tracking-widest mb-1.5">
-                  New password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showNew ? "text" : "password"}
-                    value={newPw}
-                    onChange={(e) => setNewPw(e.target.value)}
-                    required
-                    minLength={8}
-                    autoComplete="new-password"
-                    placeholder="At least 8 characters"
-                    className="w-full sketch-inset px-4 py-3 pr-12 text-ink placeholder-ink-ghost text-sm focus-ring"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowNew((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink p-1.5 focus-ring rounded-md"
-                    aria-label={showNew ? "Hide password" : "Show password"}
-                  >
-                    {showNew ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-black text-ink-soft uppercase tracking-widest mb-1.5">
-                  Confirm new password
-                </label>
-                <input
-                  type={showNew ? "text" : "password"}
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  required
-                  minLength={8}
-                  autoComplete="new-password"
-                  placeholder="Type it again"
-                  className="w-full sketch-inset px-4 py-3 text-ink placeholder-ink-ghost text-sm focus-ring"
-                />
-              </div>
-
-              <AnimatePresence>
-                {err && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="flex items-center gap-2 bg-red-50 dark:bg-red-950/40 border-2 border-red-500 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm font-semibold"
-                    style={{ boxShadow: "3px 3px 0px var(--shadow-soft)" }}
-                  >
-                    <AlertTriangle size={15} className="shrink-0" />
-                    {err}
-                  </motion.div>
-                )}
-                {success && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/40 border-2 border-emerald-500 rounded-xl px-4 py-3 text-emerald-700 dark:text-emerald-300 text-sm font-semibold"
-                    style={{ boxShadow: "3px 3px 0px var(--accent-emerald)" }}
-                  >
-                    <Check size={15} className="shrink-0" />
-                    Password updated.
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <motion.button
-                type="submit"
-                disabled={busy}
-                whileTap={{ scale: 0.97 }}
-                whileHover={{ y: -1 }}
-                className="w-full sketch-btn-dark gap-2 py-3.5 text-sm focus-ring"
-              >
-                {busy ? "Updating…" : "Update password"}
-              </motion.button>
-            </form>
-          </motion.div>
-        </motion.div>
-      </div>
+        <motion.section variants={fadeUp} className="sketch-card p-5 sm:p-7">
+          <h2 className="font-heading text-2xl text-ink flex items-center gap-2"><KeyRound size={20} /> Change password</h2>
+          <p className="mt-1 text-sm font-bold text-ink-muted">You&apos;ll stay signed in here. Other devices get signed out.</p>
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <PasswordField
+              id="current" label="Current password" value={oldPw} onChange={setOldPw}
+              show={showOld} onToggle={() => setShowOld((v) => !v)} autoComplete="current-password"
+            />
+            <PasswordField
+              id="new" label="New password" value={newPw} onChange={setNewPw}
+              show={showNew} onToggle={() => setShowNew((v) => !v)} autoComplete="new-password" placeholder="At least 8 characters"
+            />
+            <PasswordField
+              id="confirm" label="Type it again" value={confirm} onChange={setConfirm}
+              show={showNew} autoComplete="new-password"
+            />
+            <Notice>{err}</Notice>
+            <Notice tone="success">{success ? "Password updated." : null}</Notice>
+            <button type="submit" disabled={busy} className="w-full sketch-btn-accent gap-2 h-12 text-base focus-ring">
+              {busy ? <><Loader2 size={18} className="animate-spin" /> Updating…</> : "Update password"}
+            </button>
+          </form>
+        </motion.section>
+      </motion.div>
     </PageShell>
   );
 }

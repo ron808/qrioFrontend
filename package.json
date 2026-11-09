@@ -6,7 +6,7 @@
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "framer-motion": "^11.15.0",
@@ -21,7 +21,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.3.1",
+    "eslint-config-next": "^16.2.12",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

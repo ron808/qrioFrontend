@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { MotionConfig } from "framer-motion";
 
 export type Theme = "light" | "dark";
 
@@ -40,7 +41,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // either way, but useTheme() consumers can choose to gate on `mounted`.
   return (
     <ThemeContext.Provider value={{ theme, setTheme: applyTheme, toggle }}>
-      {mounted ? children : <div style={{ visibility: "hidden" }}>{children}</div>}
+      {/* Framer animations follow the OS "reduce motion" setting too. */}
+      <MotionConfig reducedMotion="user">
+        {mounted ? children : <div style={{ visibility: "hidden" }}>{children}</div>}
+      </MotionConfig>
     </ThemeContext.Provider>
   );
 }
