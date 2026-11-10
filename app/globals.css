@@ -113,6 +113,21 @@ body {
 /* <DotField> draws the moving dots once it's running. */
 html[data-dots="live"] body { background-image: none; }
 
+/* It's a game, not a document: taps and double-clicks play with the paper
+   instead of selecting text (and long-presses don't pop the iOS callout).
+   Anything you type into stays selectable. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* Smooth out theme flips for tokens but not for layout-affecting properties */
 .sketch-card,
 .sketch-inset {
