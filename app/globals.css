@@ -410,6 +410,12 @@ details summary::-webkit-details-marker { display: none; }
 details[open] summary .chevron { transform: rotate(180deg); }
 .chevron { transition: transform 0.2s var(--ease); }
 
+/* ── Logo: the sticker lifts off its shadow under the pointer ── */
+.logo-sticker { transition: transform 0.2s var(--ease); }
+@media (hover: hover) and (pointer: fine) {
+  :is(a, button):hover .logo-sticker { transform: translate(-3px, -3px); }
+}
+
 /* ── Selection ── */
 ::selection { background: var(--hl); color: var(--hl-ink); }
 

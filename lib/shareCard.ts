@@ -5,6 +5,8 @@
  * It uses the app's own fonts and the current theme's colours.
  */
 
+import { drawMark } from "./logo";
+
 export interface ResultCard {
   /** "Lone Wolf" or "Multiplayer" */
   mode: string;
@@ -93,18 +95,12 @@ export async function drawResultCard(card: ResultCard): Promise<Blob> {
     }
   }
 
-  // Logo on its tilted highlighter label, and the mode on the right.
-  c.save();
-  c.translate(72, 72);
-  c.rotate((-2 * Math.PI) / 180);
-  c.fillStyle = col.hl;
-  roundRect(c, 0, 0, 196, 86, 16);
-  c.fill();
-  c.fillStyle = col.hlInk;
-  c.font = `60px ${fMarker}`;
-  c.textAlign = "center";
-  c.fillText("Qrio", 98, 64);
-  c.restore();
+  // The logo, and the mode on the right.
+  drawMark(c, 64, 52, 112, { label: col.hl, ink: col.hlInk, shadow: col.shadow });
+  c.textAlign = "left";
+  c.fillStyle = col.ink;
+  c.font = `72px ${fMarker}`;
+  c.fillText("Qrio", 198, 134);
   c.textAlign = "right";
   c.fillStyle = col.ink;
   c.font = body(900)(36);

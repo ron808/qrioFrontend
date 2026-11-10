@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
+import { drawMark } from "@/lib/logo";
 import { PAGE_CHANGE_EVENT, setTransitionRunner } from "@/lib/navigation";
 
 /**
@@ -69,7 +70,7 @@ export default function PageTransition() {
     let raf = 0;
     let tap: { x: number; y: number; t: number } | null = null;
     let go: (() => void) | null = null;
-    let colors = { fill: "#ffd43b", line: "#1b1a17", text: "#1b1a17", marker: "cursive" };
+    let colors = { fill: "#ffd43b", line: "#1b1a17", text: "#1b1a17" };
 
     function setup(originX: number, originY: number) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -84,7 +85,6 @@ export default function PageTransition() {
         fill: cs.getPropertyValue("--hl").trim() || colors.fill,
         line: cs.getPropertyValue("--line").trim() || colors.line,
         text: cs.getPropertyValue("--hl-ink").trim() || colors.text,
-        marker: cs.getPropertyValue("--font-marker").trim() || colors.marker,
       };
 
       // A honeycomb of bubbles; at full size neighbours overlap, so the cover has no gaps.
@@ -148,11 +148,8 @@ export default function PageTransition() {
       // Loading is taking a moment: show the logo on the cover.
       if (phase === "hold" && now - holdStart > LOGO_AFTER_MS) {
         c.globalAlpha = clamp01((now - holdStart - LOGO_AFTER_MS) / 250);
-        c.fillStyle = colors.text;
-        c.font = `64px ${colors.marker}`;
-        c.textAlign = "center";
-        c.textBaseline = "middle";
-        c.fillText("Qrio", w / 2, h / 2);
+        const size = 112;
+        drawMark(c, w / 2 - size / 2, h / 2 - size / 2, size, { label: colors.fill, ink: colors.text, shadow: colors.text });
         c.globalAlpha = 1;
       }
     }

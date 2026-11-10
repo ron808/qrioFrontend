@@ -33,6 +33,7 @@ export const metadata: Metadata = {
     title: "Qrio",
     statusBarStyle: "black-translucent",
   },
+  twitter: { card: "summary_large_image" },
 };
 
 export const viewport: Viewport = {
